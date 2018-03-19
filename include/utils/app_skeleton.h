@@ -90,6 +90,7 @@ DEFINE_int32(pipe_size, -1, "Each socket pipeline will allocate 'pipe_size' buff
 DEFINE_uint64(work_subseg, 0, "A parameter for breaking the actual workload of the algorithm into sub-segments");
 DEFINE_int32(fragment_size, -1, "Fragment size for all memcpy operations");
 DEFINE_int32(cached_events, 8, "Number of events to cache in each event pool (per device)");
+DEFINE_int32(grid_size, 20, "Grid size for traversal kernels");
 DEFINE_int32(block_size, 256, "Block size for traversal kernels");
 DEFINE_bool(iteration_fusion, true, "Fuse multiple iterations (FusedWork kernel performs one iteration each launch if this is false)");
 DEFINE_int32(prio_delta, 10, "The soft priority delta");
@@ -109,6 +110,15 @@ DEFINE_double(wl_alloc_factor_pass, 0.2, "Worklist allocation factor: pass-throu
 DEFINE_bool(gen_weights, false, "Generate edge weights if missing in graph input");
 DEFINE_int32(gen_weight_range, 100, "The range to generate edge weights from (coordinate this parameter with nf-delta if running sssp-nf)");
 
+
+//My Options
+DEFINE_string(model, "async", "sync/async/hybrid can be used");
+DEFINE_int32(async_to_sync, -1, "Async to sync switch point");
+DEFINE_int32(sync_to_async, -1, "Sync to async switch point");
+DEFINE_bool(push_based, true, "default using push-based update style");
+DEFINE_uint32(max_iteration, 100, "Maximum iterated rounds (default 100)");
+
+
 #ifdef HAVE_METIS
 DEFINE_bool(pn, true, "Partition the input graph using METIS (requires a symmetric graph)");
 #else
@@ -124,6 +134,27 @@ struct Skeleton
     {
         gflags::ParseCommandLineFlags(&argc, &argv, true);
         int exit = 0;
+
+        if (FLAGS_stats) {
+            // Just run anything and return
+            App::Single();
+            return 0;
+        }
+
+        if (FLAGS_model != "sync" && FLAGS_model != "async"
+            && FLAGS_model != "hybrid") {
+            printf("for model parameter, only sync/async/hybrid is acceptable\n");
+            return 1;
+        }
+
+        if (FLAGS_model == "hybrid"
+            && (FLAGS_sync_to_async == -1 || FLAGS_async_to_sync == -1)) {
+            std::cerr << "You enable the hybrid model, but the flag async_to_sync or sync_to_async is not configured"
+                      << std::endl;
+            exit = 1;
+
+            return exit;
+        }
 
         if (FLAGS_stats)
         {

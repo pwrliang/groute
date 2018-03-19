@@ -3,8 +3,21 @@ project (groute)
 
 ############## DEPENDENCIES ##############
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-
+#set(CUDA_SEPARABLE_COMPILATION ON)
+#set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda-9.1")
 find_package(CUDA 7 REQUIRED)
+
+
+if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "5.1")
+  message(FATAL_ERROR "Insufficient GCC version (5.1 at minimum)")
+endif()
+
+
+message("GCC Version:${CMAKE_CXX_COMPILER_VERSION}")
+message("Tookit Root: ${CUDA_TOOLKIT_ROOT_DIR}")
+
+#Dynamic Parallelism
+link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64)
 
 # GFlags
 add_subdirectory(deps/gflags)
@@ -51,12 +64,18 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 set(EXTRA_LIBS gflags_static pthread ${METIS_LIBRARIES} ${CUDA_TOOLKIT_TARGET_DIR}/lib64/stubs/libcuda.so ${CUDA_TOOLKIT_TARGET_DIR}/lib64/libnvToolsExt.so)
 
+if (CUDA_VERSION_MAJOR EQUAL 7)
+  set(FOR_CUDA7 "-gencode;arch=compute_20,code=sm_20;")
+  message("Found CUDA Tookit 7")
+endif ()
+
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   message("Debug mode")
-  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-g;-lineinfo;-Xcompiler;-ggdb;-std=c++11)
-else()
-  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-O3;-DNDEBUG;-Xcompiler;-DNDEBUG;-std=c++11)
-endif()
+  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};${FOR_CUDA7};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-gencode;arch=compute_62,code=compute_62;-g;-lineinfo;-Xcompiler;-ggdb;-std=c++11)
+else ()
+  message("Release mode")
+  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};${FOR_CUDA7};-gencode;arch=compute_35,code=sm_35;-gencode;arch=compute_37,code=sm_37;-gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_52,code=sm_52;-gencode;arch=compute_52,code=compute_52;-gencode;arch=compute_62,code=compute_62;-O3;-DNDEBUG;-Xcompiler;-DNDEBUG;-std=c++11)
+endif ()
 
 set(CUDA_PROPAGATE_HOST_FLAGS OFF)
 
@@ -87,6 +106,17 @@ target_link_libraries(pr ${EXTRA_LIBS})
 
 cuda_add_executable(pbf samples/pbf/pbf_async.cu samples/pbf/main.cpp)
 target_link_libraries(pbf ${EXTRA_LIBS})
+
+
+# MYEXPRS
+
+cuda_add_executable(pr_exprs src/utils/parser.cpp src/utils/utils.cpp src/groute/graphs/csr_graph.cpp
+        samples/pr_exprs/push_based_topology_driven_pr.cu
+        samples/pr_exprs/pull_based_topology_driven_pr.cu
+        samples/pr_exprs/push_based_data_driven_pr.cu
+        samples/pr_exprs/pr_host.cpp
+        samples/pr_exprs/main.cpp)
+target_link_libraries(pr_exprs ${EXTRA_LIBS})
 
 
 # Unit tests

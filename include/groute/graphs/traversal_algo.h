@@ -68,6 +68,7 @@ DECLARE_int32(pipe_size);
 DECLARE_uint64(work_subseg);
 DECLARE_int32(fragment_size);
 DECLARE_int32(cached_events);
+DECLARE_int32(grid_size);
 DECLARE_int32(block_size);
 DECLARE_bool(iteration_fusion);
 DECLARE_int32(prio_delta);

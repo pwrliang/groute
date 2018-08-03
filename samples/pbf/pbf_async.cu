@@ -101,7 +101,7 @@ __global__ void Filter(const T * __restrict__ in, int in_size,
         int ptr_offset;
         if ((threadIdx.x & 31) == leader)
             ptr_offset = atomicAdd(out_size, __popc(lanemask));
-        ptr_offset = cub::ShuffleIndex(ptr_offset, leader);
+        ptr_offset = cub::ShuffleIndex<32>(ptr_offset, leader, 0xffffffff);
         // End of warp-aggregated filter
 
         out[ptr_offset + thread_offset] = value;

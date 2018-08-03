@@ -785,28 +785,39 @@ bool TestPageRankSingle()
     Stopwatch sw(true);
 
     groute::Worklist<index_t>* in_wl = &wl1, *out_wl = &wl2;
+    int iteration = 0;
 
     solver.Init__Single__(stream);
-    
+
+    Stopwatch sw_iter(true);
     // First relax is a special case, starts from all owned nodes
     solver.Relax__Single__( 
         groute::dev::WorkSourceRange<index_t>(
             dev_graph_allocator.DeviceObject().owned_start_node(), 
             dev_graph_allocator.DeviceObject().owned_nnodes()), 
             *in_wl, stream);
+    stream.Sync();
+    sw_iter.stop();
+
+    printf("Iteration: %d Time: %f ms\n", iteration++, sw_iter.ms());
 
     groute::Segment<index_t> work_seg;
     work_seg = in_wl->ToSeg(stream);
 
-    int iteration = 0;
+
 
     while (work_seg.GetSegmentSize() > 0)
     {
+        sw_iter.start();
         solver.Relax__Single__(
             groute::dev::WorkSourceArray<index_t>(
                 work_seg.GetSegmentPtr(), 
                 work_seg.GetSegmentSize()), 
             *out_wl, stream);
+        stream.Sync();
+        sw_iter.stop();
+
+        printf("Iteration: %d Time: %f ms\n", iteration, sw_iter.ms());
 
         if (++iteration > FLAGS_max_pr_iterations) break;
 

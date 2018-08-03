@@ -61,7 +61,7 @@ DEFINE_bool(check, false, "Check results");
 /* variants */
 DEFINE_bool(all, false, "Run all variants");
 DEFINE_bool(single, false, "Run the single GPU variant");
-DEFINE_bool(async_multi, true, "Run the async multigpu variant");
+DEFINE_bool(async_multi, false, "Run the async multigpu variant");
 DEFINE_bool(opt, true, "Run the optimized (prio + fusion) async multigpu variant");
 
 

@@ -33,7 +33,7 @@
 DEFINE_int32(max_pr_iterations, 200, "The maximum number of PR iterations"); // used just for host and some single versions  
 DEFINE_int32(top_ranks, 10, "The number of top ranks to compare for PR regression");
 DEFINE_bool(print_ranks, false, "Write out ranks to output");
-
+DECLARE_double(error);
 
 std::vector<rank_t> PageRankHost(groute::graphs::host::CSRGraph& graph)
 {
@@ -97,7 +97,7 @@ std::vector<rank_t> PageRankHost(groute::graphs::host::CSRGraph& graph)
                 rank_t prev = residual[dest];
                 residual[dest] += update;
 
-                if (prev + update > EPSILON && prev < EPSILON)
+                if (prev + update > FLAGS_error && prev < FLAGS_error)
                 {
                     out_wl->push(dest);
                 }
@@ -213,12 +213,15 @@ int PageRankOutput(const char *file, const std::vector<rank_t>& ranks)
         std::stable_sort(pr, pr + ranks.size());
         fprintf(stderr, "Writing to file ...\n");
 
-        fprintf(f, "ALPHA %*e EPSILON %*e\n", FLT_DIG, ALPHA, FLT_DIG, EPSILON);
-        fprintf(f, "RANKS 1--%d of %d\n", FLAGS_top_ranks, (int)ranks.size());
-        for (int i = 1; i <= FLAGS_top_ranks; i++) {
+        int top_ranks = ranks.size();
+
+        fprintf(f, "ALPHA %*e EPSILON %*e\n", FLT_DIG, ALPHA, FLT_DIG, FLAGS_error);
+        fprintf(f, "RANKS 1--%d of %d\n", top_ranks, (int)ranks.size());
+        for (int i = 1; i <= top_ranks; i++) {
             if (!FLAGS_print_ranks)
                 fprintf(f, "%d %d\n", i, pr[ranks.size() - i].node);
             else
+//                fprintf(f, "%d %d %*e\n", i, pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank);
                 fprintf(f, "%d %d %*e\n", i, pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank / sum);
         }
 

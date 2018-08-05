@@ -36,7 +36,7 @@
 #include <utils/interactor.h>
 #include <utils/app_skeleton.h>
 
-
+DEFINE_double(error, 0.01,"PR error");
 bool TestPageRankSingle();
 bool TestPageRankAsyncMulti(int ngpus);
 bool TestPageRankAsyncMultiOptimized(int ngpus);

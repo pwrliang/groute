@@ -49,7 +49,7 @@
 
 DECLARE_int32(max_pr_iterations);
 DECLARE_bool(verbose);
-
+DECLARE_double(error);
 #define GTID (blockIdx.x * blockDim.x + threadIdx.x)
 
 
@@ -153,8 +153,8 @@ namespace pr
     __global__ void PageRankKernel__Single__NestedParallelism__(
         TGraph graph,
         RankDatum<rank_t> current_ranks, ResidualDatum<rank_t> residual,
-        WorkSource work_source, TWorklist<index_t> output_worklist
-        )
+        WorkSource work_source, TWorklist<index_t> output_worklist,
+        double error)
     {
         unsigned tid = TID_1D;
         unsigned nthreads = TOTAL_THREADS_1D;
@@ -188,11 +188,11 @@ namespace pr
 
             groute::dev::CTAWorkScheduler<rank_t>::template schedule(
                 np_local, 
-                [&graph, &residual, &output_worklist](index_t edge, rank_t update)
+                [&graph, &residual, &output_worklist, &error](index_t edge, rank_t update)
                 {
                     index_t dest = graph.edge_dest(edge);
                     rank_t prev = atomicAdd(residual.get_item_ptr(dest), update);
-                    if (prev + update > EPSILON && prev < EPSILON)
+                    if (prev + update > error && prev < error)
                     {
                         output_worklist.append_warp(dest);
                     }
@@ -209,8 +209,8 @@ namespace pr
     __global__ void PageRankKernel__Single__(
         TGraph graph,
         RankDatum<rank_t> current_ranks, ResidualDatum<rank_t> residual,
-        WorkSource work_source, TWorklist<index_t> output_worklist
-        )
+        WorkSource work_source, TWorklist<index_t> output_worklist,
+        double error)
     {
         unsigned tid = TID_1D;
         unsigned nthreads = TOTAL_THREADS_1D;
@@ -239,7 +239,7 @@ namespace pr
             {
                 index_t dest = graph.edge_dest(edge);
                 rank_t prev = atomicAdd(residual.get_item_ptr(dest), update);
-                if (prev + update > EPSILON && prev < EPSILON)
+                if (prev + update > error && prev < error)
                 {
                     output_worklist.append_warp(dest);
                 }
@@ -518,7 +518,8 @@ namespace pr
                 PageRankKernel__Single__NestedParallelism__ << < grid_dims, block_dims, 0, stream.cuda_stream >> >(
                     m_graph, m_current_ranks, m_residual,
                     work_source,
-                    output_worklist.DeviceObject());
+                    output_worklist.DeviceObject(),
+                    FLAGS_error);
             }
             else
             {
@@ -526,7 +527,8 @@ namespace pr
                 PageRankKernel__Single__ << < grid_dims, block_dims, 0, stream.cuda_stream >> >(
                     m_graph, m_current_ranks, m_residual,
                     work_source,
-                    output_worklist.DeviceObject());
+                    output_worklist.DeviceObject(),
+                    FLAGS_error);
             }
         }
 

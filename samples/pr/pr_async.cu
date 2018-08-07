@@ -848,7 +848,7 @@ bool TestPageRankSingle()
         printf("\nWarning: ignoring repetitions flag, running just one repetition (not implemented)\n");
 
     printf("\n%s: %f ms. <filter>\n\n", pr::Algo::Name(), sw.ms() / FLAGS_repetitions);
-    printf("Sort: %f ms.", sort_time);
+    printf("Sort: %f ms.\n\n", sort_time);
     printf("%s terminated after %d iterations (max: %d)\n\n", pr::Algo::Name(), iteration, FLAGS_max_pr_iterations);
 
     // Gather

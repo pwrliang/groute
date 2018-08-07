@@ -222,7 +222,8 @@ int PageRankOutput(const char *file, const std::vector<rank_t>& ranks)
                 fprintf(f, "%d %d\n", i, pr[ranks.size() - i].node);
             else
 //                fprintf(f, "%d %d %*e\n", i, pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank);
-                fprintf(f, "%d %d %*e\n", i, pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank / sum);
+//                fprintf(f, "%d %*e\n", pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank / sum);
+                fprintf(f, "%d %*e\n", pr[ranks.size() - i].node, FLT_DIG, pr[ranks.size() - i].rank);
         }
 
         free(pr);

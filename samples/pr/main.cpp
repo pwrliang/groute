@@ -36,10 +36,14 @@
 #include <utils/interactor.h>
 #include <utils/app_skeleton.h>
 
-DEFINE_double(error, 0.01,"PR error");
+DEFINE_double(error, 0.01, "PR error");
+DEFINE_bool(wl_sort, false, "sort worklist by node id");
 bool TestPageRankSingle();
+
 bool TestPageRankAsyncMulti(int ngpus);
+
 bool TestPageRankAsyncMultiOptimized(int ngpus);
+
 void CleanupGraphs();
 
 
@@ -47,13 +51,20 @@ namespace pr
 {
     struct App
     {
-        static const char* Name()       { return "page rank"; }
-        static const char* NameUpper()  { return "Page Rank"; }
+        static const char *Name()
+        { return "page rank"; }
 
-        static bool Single()            { return TestPageRankSingle(); }
-        static bool AsyncMulti(int G)   { return FLAGS_opt ? TestPageRankAsyncMultiOptimized(G) : TestPageRankAsyncMulti(G); }
+        static const char *NameUpper()
+        { return "Page Rank"; }
 
-        static void Cleanup()           { CleanupGraphs(); }
+        static bool Single()
+        { return TestPageRankSingle(); }
+
+        static bool AsyncMulti(int G)
+        { return FLAGS_opt ? TestPageRankAsyncMultiOptimized(G) : TestPageRankAsyncMulti(G); }
+
+        static void Cleanup()
+        { CleanupGraphs(); }
     };
 }
 
@@ -65,7 +76,8 @@ int main(int argc, char **argv)
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaError_t cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
+    if (cudaStatus != cudaSuccess)
+    {
         fprintf(stderr, "cudaDeviceReset failed!");
         return 1;
     }

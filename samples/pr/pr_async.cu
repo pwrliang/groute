@@ -31,7 +31,8 @@
 #include <thread>
 #include <memory>
 #include <random>
-
+#include <thrust/sort.h>
+#include <thrust/device_ptr.h>
 #include <gflags/gflags.h>
 
 #include <groute/event_pool.h>
@@ -49,6 +50,7 @@
 
 DECLARE_int32(max_pr_iterations);
 DECLARE_bool(verbose);
+DECLARE_bool(wl_sort);
 DECLARE_double(error);
 #define GTID (blockIdx.x * blockDim.x + threadIdx.x)
 
@@ -788,6 +790,7 @@ bool TestPageRankSingle()
 
     groute::Worklist<index_t>* in_wl = &wl1, *out_wl = &wl2;
     int iteration = 0;
+    float sort_time = 0;
 
     solver.Init__Single__(stream);
 
@@ -811,6 +814,17 @@ bool TestPageRankSingle()
     while (work_seg.GetSegmentSize() > 0)
     {
         sw_iter.start();
+
+
+        if (FLAGS_wl_sort) {
+            Stopwatch sw_sort(true);
+            thrust::device_ptr<index_t> d_worklist(work_seg.GetSegmentPtr());
+            thrust::sort(d_worklist, d_worklist + work_seg.GetSegmentSize());
+            sw_sort.stop();
+
+            sort_time += sw_sort.ms();
+        }
+
         solver.Relax__Single__(
             groute::dev::WorkSourceArray<index_t>(
                 work_seg.GetSegmentPtr(), 
@@ -834,6 +848,7 @@ bool TestPageRankSingle()
         printf("\nWarning: ignoring repetitions flag, running just one repetition (not implemented)\n");
 
     printf("\n%s: %f ms. <filter>\n\n", pr::Algo::Name(), sw.ms() / FLAGS_repetitions);
+    printf("Sort: %f ms.", sort_time);
     printf("%s terminated after %d iterations (max: %d)\n\n", pr::Algo::Name(), iteration, FLAGS_max_pr_iterations);
 
     // Gather

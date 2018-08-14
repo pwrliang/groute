@@ -82,7 +82,7 @@ DEFINE_int32(gen_nnodes, 100000, "Number of nodes for random graph generation");
 DEFINE_int32(gen_factor, 10, "A factor number for graph generation");
 DEFINE_int32(gen_method, 0, "Select the requested graph generation method: \n\t0: Random graph \n\t1: Two-way chain graph without segment intersection \n\t2: Two-way chain graph with intersection \n\t3: Full cliques per device without segment intersection");
 DEFINE_uint64(wl_alloc_abs, 0, "Absolute size for local worklists (if not zero, overrides --wl_alloc_factor");
-DEFINE_double(wl_alloc_factor, 0.2, "Local worklists will allocate '(nedges / ngpus)' times this factor");
+DEFINE_double(wl_alloc_factor, 1, "Local worklists will allocate '(nedges / ngpus)' times this factor");
 DEFINE_double(pipe_alloc_factor, 0.05, "Each socket pipeline buffer will allocate 'nnodes' times this factor");
 DEFINE_int32(pipe_alloc_size, -1, "Each socket pipeline buffer will allocate 'pipe_alloc_size' items per buffer");
 DEFINE_double(pipe_size_factor, 4, "Each socket pipeline will allocate 'ngpus' times this factor buffers");

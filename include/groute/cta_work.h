@@ -229,6 +229,8 @@ namespace dev {
                 {
                     work(start + ii, meta_data);
                 }
+
+                cub::WARP_SYNC(0xffffffff);
             }
 
             __syncthreads();

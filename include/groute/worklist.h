@@ -53,10 +53,11 @@ __device__ __forceinline__ int lane_id() { return threadIdx.x & (WARP_SIZE - 1);
 
 // TODO: Wrap ballot functionality
 __device__ __forceinline__ void warp_active_count(int &first, int &offset, int &total) {
-    unsigned int active = __ballot(1);
+    unsigned int active = __ballot_sync(0xffffffff, 1);
     total = __popc(active);
     offset = __popc(active & cub::LaneMaskLt());
     first = __ffs(active) - 1;
+    cub::WARP_SYNC(0xffffffff);
 }
 
 
@@ -83,7 +84,8 @@ namespace groute {
             }
 
             __device__ void append_warp(const T &item) const {
-//                append(item); // fix for volta
+                append(item); // fix for volta
+                /*
                 int first, total, offset;
                 uint32_t allocation = 0;
 
@@ -96,6 +98,7 @@ namespace groute {
 
                 allocation = cub::ShuffleIndex<32>(allocation, first, 0xffffffff);
                 m_data[allocation + offset] = item;
+                */
             }
 
             __device__ void append_warp(const T &item, int leader, int warp_count, int offset) const {

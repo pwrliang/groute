@@ -183,12 +183,12 @@ namespace dev {
 #endif
             const int lane_id = cub::LaneId();
 
-            while (__any(np_local.size >= NP_WP_CROSSOVER))
+            while (__any_sync(0xffffffff, np_local.size >= NP_WP_CROSSOVER))
             {
 
 #ifndef NO_CTA_WARP_INTRINSICS
                 // Compete for work scheduling  
-                int mask = __ballot(np_local.size >= NP_WP_CROSSOVER ? 1 : 0); 
+                int mask = __ballot_sync(0xffffffff, np_local.size >= NP_WP_CROSSOVER ? 1 : 0); 
                 // Select a deterministic winner  
                 int leader = __ffs(mask) - 1;   
 
@@ -230,7 +230,7 @@ namespace dev {
                     work(start + ii, meta_data);
                 }
 
-                cub::WARP_SYNC(0xffffffff);
+                //cub::WARP_SYNC(0xffffffff);
             }
 
             __syncthreads();

@@ -83,19 +83,19 @@ namespace groute {
             }
 
             __device__ void append_warp(const T &item) const {
-                append(item); // fix for volta
-//                int first, total, offset;
-//                uint32_t allocation = 0;
-//
-//                warp_active_count(first, offset, total);
-//
-//                if (offset == 0) {
-//                    allocation = atomicAdd((uint32_t *) m_count, total);
-//                    assert(allocation + total <= m_capacity);
-//                }
-//
-//                allocation = cub::ShuffleIndex<32>(allocation, first, 0xffffffff);
-//                m_data[allocation + offset] = item;
+//                append(item); // fix for volta
+                int first, total, offset;
+                uint32_t allocation = 0;
+
+                warp_active_count(first, offset, total);
+
+                if (offset == 0) {
+                    allocation = atomicAdd((uint32_t *) m_count, total);
+                    assert(allocation + total <= m_capacity);
+                }
+
+                allocation = cub::ShuffleIndex<32>(allocation, first, 0xffffffff);
+                m_data[allocation + offset] = item;
             }
 
             __device__ void append_warp(const T &item, int leader, int warp_count, int offset) const {

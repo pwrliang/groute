@@ -95,7 +95,7 @@ DEFINE_bool(iteration_fusion, true, "Fuse multiple iterations (FusedWork kernel 
 DEFINE_int32(prio_delta, 10, "The soft priority delta");
 DEFINE_bool(count_work, false, "Count the work-items performed by each individual GPU");
 DEFINE_bool(stats, false, "Print graph statistics and exit");
-DEFINE_bool(warp_append, true, "Use warp aggregated operations for worklist append's");
+DEFINE_bool(warp_append, false, "Use warp aggregated operations for worklist append's");
 DEFINE_bool(debug_print, false, "Print detailed debug info");
 DEFINE_bool(high_priority_receive, true, "Use a high priority stream for split receive");
 

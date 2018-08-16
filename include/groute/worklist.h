@@ -102,16 +102,17 @@ namespace groute {
             }
 
             __device__ void append_warp(const T &item, int leader, int warp_count, int offset) const {
-                uint32_t allocation = 0;
-
-                if (lane_id() == leader) // the leader thread  
-                {
-                    allocation = atomicAdd((uint32_t *) m_count, warp_count);
-                    assert(allocation + warp_count <= m_capacity);
-                }
-
-                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
-                m_data[allocation + offset] = item;
+                append(item);
+//                uint32_t allocation = 0;
+//
+//                if (lane_id() == leader) // the leader thread
+//                {
+//                    allocation = atomicAdd((uint32_t *) m_count, warp_count);
+//                    assert(allocation + warp_count <= m_capacity);
+//                }
+//
+//                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
+//                m_data[allocation + offset] = item;
             }
 
             __device__ __forceinline__ void reset() const {
@@ -216,20 +217,21 @@ namespace groute {
             }
 
             __device__ void append_warp(const T &item, int leader, int warp_count, int offset) {
-                uint32_t allocation = 0;
-
-                if (lane_id() == leader) // the leader thread  
-                {
-                    allocation = atomicAdd((uint32_t *) m_alloc_end, warp_count);
-                    assert((allocation + warp_count) - *m_start < (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
-                }
-
-                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
-
-                if (POWER_OF_TWO)
-                    m_data[(allocation + offset) & m_capacity] = item;
-                else
-                    m_data[(allocation + offset) % m_capacity] = item;
+                append(item);
+//                uint32_t allocation = 0;
+//
+//                if (lane_id() == leader) // the leader thread
+//                {
+//                    allocation = atomicAdd((uint32_t *) m_alloc_end, warp_count);
+//                    assert((allocation + warp_count) - *m_start < (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
+//                }
+//
+//                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
+//
+//                if (POWER_OF_TWO)
+//                    m_data[(allocation + offset) & m_capacity] = item;
+//                else
+//                    m_data[(allocation + offset) % m_capacity] = item;
             }
 
             __device__ __forceinline__ void prepend(const T &item) {

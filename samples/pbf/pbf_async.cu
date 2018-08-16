@@ -94,7 +94,7 @@ __global__ void Filter(const T * __restrict__ in, int in_size,
     if (Pred::Test(value))
     {
         // Warp-aggregated filter
-        int lanemask = __ballot(1);
+        int lanemask = __ballot_sync(0xffffffff, 1);
         int leader = __ffs(lanemask) - 1;
         int thread_offset = __popc(lanemask & ((1 << (threadIdx.x & 31)) - 1));
 

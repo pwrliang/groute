@@ -140,7 +140,7 @@ namespace groute {
             }
 
             __device__ __forceinline__ void add_one_warp() {
-                int lanemask = __ballot(1);
+                int lanemask = __ballot_sync(0xffffffff, 1);
                 int leader = __ffs(lanemask) - 1;
 
                 if (lane_id() == leader) {

@@ -854,6 +854,14 @@ bool TestPageRankSingle()
     // Gather
     auto gathered_output = pr::Algo::Gather(dev_graph_allocator, residual, current_ranks);
 
+    double pr_sum = 0;
+
+    for (auto pr:gathered_output){
+        pr_sum += pr;
+    }
+
+    printf("PR Sum: %f\n", pr_sum);
+
     if (FLAGS_output.length() != 0)
         pr::Algo::Output(FLAGS_output.c_str(), gathered_output);
 

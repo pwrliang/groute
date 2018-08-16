@@ -532,7 +532,18 @@ namespace pr {
                 UnusedData&... data)
             {
                 graph_allocator.GatherDatum(current_ranks);
-                return current_ranks.GetHostData();
+
+                auto gathered_output = current_ranks.GetHostData();
+
+                double pr_sum = 0;
+
+                for (auto pr:gathered_output){
+                    pr_sum += pr;
+                }
+
+                printf("PR Sum: %f\n", pr_sum);
+
+                return gathered_output;
             }
 
             template<

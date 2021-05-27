@@ -115,3 +115,4 @@ cuda_add_executable(mb-tests test/micro-benchmarks/main.cpp
 
 target_link_libraries(mb-tests gtest pthread)
 cuda_add_cublas_to_target(mb-tests)
+target_link_libraries(mb-tests ${EXTRA_LIBS})

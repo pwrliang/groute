@@ -100,7 +100,7 @@ namespace groute {
                     assert(allocation + total <= m_capacity);
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[allocation + offset] = item;
             }
 
@@ -114,7 +114,7 @@ namespace groute {
                     assert(allocation + total <= m_capacity);
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[allocation + offset] = item;
             }
 
@@ -190,7 +190,7 @@ namespace groute {
                     assert((allocation + total) - *m_start < (m_capacity_mask + 1));
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[(allocation + offset) & m_capacity_mask] = item;
             }
 
@@ -204,7 +204,7 @@ namespace groute {
                     assert((allocation + total) - *m_start < (m_capacity_mask + 1));
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[(allocation + offset) & m_capacity_mask] = item;
             }
 
@@ -227,7 +227,7 @@ namespace groute {
                     assert(*m_end - allocation < (m_capacity_mask + 1));
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[(allocation + offset) & m_capacity_mask] = item;
             }
                         
@@ -241,7 +241,7 @@ namespace groute {
                     assert(*m_end - allocation < (m_capacity_mask + 1));
                 }
     
-                allocation = cub::ShuffleIndex(allocation, leader);
+                allocation = cub::ShuffleIndex<32>(allocation, leader, 0xffffffff);
                 m_data[(allocation + offset) & m_capacity_mask] = item;
             }
 

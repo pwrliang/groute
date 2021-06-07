@@ -168,6 +168,16 @@ namespace groute {
                 {
                     topology[i] = { (i + 1) % ndevs };
                 }
+              if(ndevs == 8) {
+                topology[0] = {3};
+                topology[1] = {7};
+                topology[2] = {1};
+                topology[3] = {2};
+                topology[4] = {5};
+                topology[5] = {6};
+                topology[6] = {0};
+                topology[7] = {4};
+              }
 
                 // Instead of pushing to GPU 0, we push tasks to the first available device,
                 // this is beneficial for the case where the first device is already utilized

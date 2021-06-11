@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -39,9 +39,10 @@
 typedef uint32_t level_t;
 extern const level_t INF;
 
-std::vector<level_t> BFSHost(groute::graphs::host::CSRGraph& graph, index_t source_node);
-int BFSCheckErrors(const std::vector<level_t>& levels, const std::vector<level_t>& regression);
-int BFSOutput(const char *file, const std::vector<level_t>& levels);
-
+std::vector<level_t> BFSHost(groute::graphs::host::CSRGraph &graph,
+                             index_t source_node);
+int BFSCheckErrors(const std::vector<level_t> &levels,
+                   const std::vector<level_t> &regression);
+int BFSOutput(const char *file, const std::vector<level_t> &levels);
 
 #endif // __BFS_COMMON_H

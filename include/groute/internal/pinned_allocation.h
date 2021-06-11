@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -31,51 +31,45 @@
 #define __GROUTE_PINNED_ALLOCATION_H
 
 namespace groute {
-    template <typename T, unsigned int FLAGS = 0U>
-    class pinned_allocator : public std::allocator<T>
-    {
-    public:
-        typedef size_t size_type;
-        typedef T* pointer;
-        typedef const T* const_pointer;
+template <typename T, unsigned int FLAGS = 0U>
+class pinned_allocator : public std::allocator<T> {
+public:
+  typedef size_t size_type;
+  typedef T *pointer;
+  typedef const T *const_pointer;
 
-        template<typename _Other>
-        struct rebind
-        {
-            typedef pinned_allocator<_Other> other;
-        };
+  template <typename _Other> struct rebind {
+    typedef pinned_allocator<_Other> other;
+  };
 
-        pointer allocate(size_type n, const void *hint = nullptr)
-        {
-            if (n == 0)
-                return nullptr;
+  pointer allocate(size_type n, const void *hint = nullptr) {
+    if (n == 0)
+      return nullptr;
 
-            pointer p;
-            cudaError_t err = cudaMallocHost(&p, n * sizeof(T), FLAGS);
-            if (err == cudaSuccess)
-                return p;
-            return nullptr;
-        }
+    pointer p;
+    cudaError_t err = cudaMallocHost(&p, n * sizeof(T), FLAGS);
+    if (err == cudaSuccess)
+      return p;
+    return nullptr;
+  }
 
-        void deallocate(pointer p, size_type n)
-        {
-            cudaFreeHost(p);
-            return;
-        }
+  void deallocate(pointer p, size_type n) {
+    cudaFreeHost(p);
+    return;
+  }
 
-        pinned_allocator() throw() : std::allocator<T>() { }
-        pinned_allocator(const pinned_allocator &a) throw() 
-            : std::allocator<T>(a) { }
+  pinned_allocator() throw() : std::allocator<T>() {}
+  pinned_allocator(const pinned_allocator &a) throw() : std::allocator<T>(a) {}
 
-        template <class U>
-        pinned_allocator(const pinned_allocator<U> &a) throw() 
-            : std::allocator<T>(a) { }
+  template <class U>
+  pinned_allocator(const pinned_allocator<U> &a) throw()
+      : std::allocator<T>(a) {}
 
-        ~pinned_allocator() throw() { }
-    };
+  ~pinned_allocator() throw() {}
+};
 
-    template<typename T, unsigned int FLAGS = 0U>
-    using pinned_vector = std::vector< T, pinned_allocator<T, FLAGS> >;
+template <typename T, unsigned int FLAGS = 0U>
+using pinned_vector = std::vector<T, pinned_allocator<T, FLAGS>>;
 
 } // namespace groute
 

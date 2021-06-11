@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -29,128 +29,110 @@
 #ifndef __CC_KERNELS_H
 #define __CC_KERNELS_H
 
+#include <cuda_runtime.h>
 #include <initializer_list>
-#include <vector>
 #include <map>
 #include <memory>
-#include <cuda_runtime.h>
+#include <vector>
 
 #include <groute/internal/cuda_utils.h>
 
 typedef groute::graphs::Edge Edge;
 
-static __global__ void InitParents(groute::graphs::dev::Irregular<int> parents)
-{
-    int tid = parents.get_wid();
+static __global__ void
+InitParents(groute::graphs::dev::Irregular<int> parents) {
+  int tid = parents.get_wid();
 
-    if (!parents.has(tid))
-        return;
+  if (!parents.has(tid))
+    return;
 
-    parents.write(tid, tid);
+  parents.write(tid, tid);
 }
 
-template<typename Graph>
-__global__ void HookHighToLow(
-    groute::graphs::dev::Irregular<int>     parents,
-    Graph                    edges,
-    groute::graphs::dev::Flag          flag
-    )
-{
-    __shared__ typename decltype(flag)::SharedData flag_sdata;
+template <typename Graph>
+__global__ void HookHighToLow(groute::graphs::dev::Irregular<int> parents,
+                              Graph edges, groute::graphs::dev::Flag flag) {
+  __shared__ typename decltype(flag)::SharedData flag_sdata;
 
-    flag.init(flag_sdata);
+  flag.init(flag_sdata);
 
-    Edge e = edges.GetEdge(GTID);
+  Edge e = edges.GetEdge(GTID);
 
-    if (e.u != e.v)
-    {
-        int p_u = parents.read(e.u);
-        int p_v = parents.read(e.v);
+  if (e.u != e.v) {
+    int p_u = parents.read(e.u);
+    int p_v = parents.read(e.v);
 
-        if (p_u != p_v)
-        {
-            int high = p_u > p_v ? p_u : p_v;
-            int low = p_u + p_v - high;
+    if (p_u != p_v) {
+      int high = p_u > p_v ? p_u : p_v;
+      int low = p_u + p_v - high;
 
-            flag.set();      // signal work was done
-            parents.write(high, low);    // hook
-        }
+      flag.set();               // signal work was done
+      parents.write(high, low); // hook
     }
+  }
 
-    flag.commit();
+  flag.commit();
 }
 
+template <typename Graph, bool R1 = false>
+__global__ void Hook(groute::graphs::dev::Irregular<int> parents, Graph edges) {
+  Edge e = edges.GetEdge(GTID);
 
-template<typename Graph, bool R1 = false>
-__global__ void Hook(
-    groute::graphs::dev::Irregular<int>     parents,
-    Graph                    edges
-    )
-{
-    Edge e = edges.GetEdge(GTID);
+  if (!R1) // at R1 we know parents contains self pointers
+  {
+    e.u = parents.read(e.u);
+    e.v = parents.read(e.v);
+  }
 
-    if (!R1) // at R1 we know parents contains self pointers  
-    {
-        e.u = parents.read(e.u);
-        e.v = parents.read(e.v);
+  int high = e.u > e.v ? e.u : e.v;
+  int low = e.u + e.v - high;
+
+  parents.write(high, low); // hook
+}
+
+template <typename Graph>
+__global__ void HookHighToLowAtomic(groute::graphs::dev::Irregular<int> parents,
+                                    Graph edges) {
+  Edge e = edges.GetEdge(GTID);
+
+  if (e.u != e.v) {
+    int p_u = parents.read(e.u);
+    int p_v = parents.read(e.v);
+
+    while (p_u != p_v) {
+      int high = p_u > p_v ? p_u : p_v;
+      int low = p_u + p_v - high;
+
+      int prev = parents.write_atomicCAS(high, high, low);
+
+      if (prev == high || prev == low) {
+        break;
+      }
+
+      p_u = parents.read(prev);
+      p_v = parents.read(low);
     }
-
-    int high = e.u > e.v ? e.u : e.v;
-    int low = e.u + e.v - high;
-
-    parents.write(high, low);    // hook
+  }
 }
 
+static __global__ void
+MultiJumpCompress(groute::graphs::dev::Irregular<int> parents) {
+  int tid = parents.get_wid();
 
-template<typename Graph>
-__global__ void HookHighToLowAtomic(
-    groute::graphs::dev::Irregular<int>     parents,
-    Graph                    edges
-    )
-{
-    Edge e = edges.GetEdge(GTID);
+  if (!parents.has(tid))
+    return;
 
-    if (e.u != e.v)
-    {
-        int p_u = parents.read(e.u);
-        int p_v = parents.read(e.v);
+  int p, pp;
 
-        while (p_u != p_v)
-        {
-            int high = p_u > p_v ? p_u : p_v;
-            int low = p_u + p_v - high;
+  p = parents.read(tid);
+  pp = parents.read(p);
 
-            int prev = parents.write_atomicCAS(high, high, low);
+  while (p != pp) {
+    parents.write(tid, pp);
 
-            if (prev == high || prev == low) {
-                break;
-            }
-
-            p_u = parents.read(prev);
-            p_v = parents.read(low);
-        }
-    }
-}
-
-static __global__ void MultiJumpCompress(groute::graphs::dev::Irregular<int> parents)
-{
-    int tid = parents.get_wid();
-
-    if (!parents.has(tid))
-        return;
-
-    int p, pp;
-
-    p = parents.read(tid);
+    p = pp;
     pp = parents.read(p);
-
-    while (p != pp)
-    {
-        parents.write(tid, pp);
-
-        p = pp;
-        pp = parents.read(p);
-    }
+  }
 }
 
 #endif // __CC_KERNELS_H

@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -28,27 +28,26 @@
 // POSSIBILITY OF SUCH DAMAGE.
 #include <cstdio>
 
-#include <gtest/gtest.h>
 #include <gflags/gflags.h>
+#include <gtest/gtest.h>
 
 #include <cuda_runtime.h>
 
-GTEST_API_ int main(int argc, char **argv)
-{
-    printf("Running tests...\n");
-    testing::InitGoogleTest(&argc, argv);
+GTEST_API_ int main(int argc, char **argv) {
+  printf("Running tests...\n");
+  testing::InitGoogleTest(&argc, argv);
 
-    gflags::ParseCommandLineFlags(&argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    int res = RUN_ALL_TESTS();
+  int res = RUN_ALL_TESTS();
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaError_t cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
+  // cudaDeviceReset must be called before exiting in order for profiling and
+  // tracing tools such as Nsight and Visual Profiler to show complete traces.
+  cudaError_t cudaStatus = cudaDeviceReset();
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaDeviceReset failed!");
+    return 1;
+  }
 
-    return res;
+  return res;
 }

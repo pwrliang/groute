@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -38,132 +38,126 @@
 typedef groute::graphs::Edge Edge;
 typedef int component_t;
 
-inline bool CheckComponents(std::vector<int> &host_parents, size_t count)
-{
-    int components = 0, errors = 0;
-    for (int i = 0; i < count; i++) {
-        if (host_parents[i] == i) {
-            components++;
+inline bool CheckComponents(std::vector<int> &host_parents, size_t count) {
+  int components = 0, errors = 0;
+  for (int i = 0; i < count; i++) {
+    if (host_parents[i] == i) {
+      components++;
+    } else {
+      int depth = 1;
+
+      int p = host_parents[i];
+      int pp = host_parents[p];
+
+      while (p != pp) // parent is expected to be a root
+      {
+        ++depth; // track the depth
+
+        if (pp > p) {
+          printf("Critical error: encountered a low to high pointer (p=%d, "
+                 "pp=%d, nvtxs=%d)\n",
+                 p, pp, (int)host_parents.size());
+          break;
         }
-        else 
-        {
-            int depth = 1;
 
-            int p = host_parents[i];
-            int pp = host_parents[p];
+        p = pp;
+        pp = host_parents[p];
+      }
 
-            while (p != pp) // parent is expected to be a root
-            {
-                ++depth; // track the depth
-
-                if (pp > p)
-                {
-                    printf("Critical error: encountered a low to high pointer (p=%d, pp=%d, nvtxs=%d)\n", 
-                        p, pp, (int)host_parents.size());
-                    break;
-                }
-
-                p = pp;
-                pp = host_parents[p];
-            }
-
-            if (depth > 1) {
-                printf("Warning: component is not a complete star (i=%d, depth=%d, nvtxs=%d)\n", 
-                    i, depth, (int)host_parents.size());
-                ++errors;
-            }
-        }
+      if (depth > 1) {
+        printf("Warning: component is not a complete star (i=%d, depth=%d, "
+               "nvtxs=%d)\n",
+               i, depth, (int)host_parents.size());
+        ++errors;
+      }
     }
+  }
 
-    printf("\nComponents: %d\n\n", components);
-    if (errors > 0)
-        printf("Errors: %d\n\n", errors);
+  printf("\nComponents: %d\n\n", components);
+  if (errors > 0)
+    printf("Errors: %d\n\n", errors);
 
-    return errors == 0;
+  return errors == 0;
 }
 
-inline void LoadGraph(
-    std::vector<Edge>& host_edges,
-    uint32_t* nvtxs, uint32_t* nedges, graph_t* graph,
-    bool ugtv, bool removeBidirectionalEdges)
-{
-    uint32_t i, j, u, v, a, b;
-    Edge e;
+inline void LoadGraph(std::vector<Edge> &host_edges, uint32_t *nvtxs,
+                      uint32_t *nedges, graph_t *graph, bool ugtv,
+                      bool removeBidirectionalEdges) {
+  uint32_t i, j, u, v, a, b;
+  Edge e;
 
-    i = graph->nedges;
-    j = graph->nvtxs;
+  i = graph->nedges;
+  j = graph->nvtxs;
 
-    host_edges.resize(i);
+  host_edges.resize(i);
 
-    if (host_edges.size() != i){
-        printf("Insufficient memory, data lost");
-        exit(0);
+  if (host_edges.size() != i) {
+    printf("Insufficient memory, data lost");
+    exit(0);
+  }
+
+  uint32_t edc = 0;
+
+  for (a = 0; a < j; a++) {
+    uint32_t n = graph->xadj[a + 1];
+    for (b = graph->xadj[a]; b < n; b++) {
+
+      u = a;
+      v = graph->adjncy[b];
+
+      if (removeBidirectionalEdges && ((ugtv && u < v) || (!ugtv && u > v)))
+        continue; // take only one of the two [u, v] [v, u] edges
+
+      e.u = u;
+      e.v = v;
+      host_edges[edc++] = e;
     }
+  }
 
-    uint32_t edc = 0;
+  *nvtxs = j;
+  *nedges = edc;
 
-    for (a = 0; a < j; a++){
-        uint32_t n = graph->xadj[a + 1];
-        for (b = graph->xadj[a]; b < n; b++){
-
-            u = a;
-            v = graph->adjncy[b];
-
-            if (removeBidirectionalEdges && ((ugtv && u < v) || (!ugtv && u > v)))
-                continue; // take only one of the two [u, v] [v, u] edges
-
-            e.u = u;
-            e.v = v;
-            host_edges[edc++] = e;
-        }
-    }
-
-    *nvtxs = j;
-    *nedges = edc;
-
-    host_edges.resize(edc);
+  host_edges.resize(edc);
 }
 
-inline void LoadGraph(
-    groute::pinned_vector<Edge>& host_edges,
-    uint32_t* nvtxs, uint32_t* nedges, graph_t* graph,
-    bool ugtv, bool removeBidirectionalEdges)
-{
-    uint32_t i, j, u, v, a, b;
-    Edge e;
+inline void LoadGraph(groute::pinned_vector<Edge> &host_edges, uint32_t *nvtxs,
+                      uint32_t *nedges, graph_t *graph, bool ugtv,
+                      bool removeBidirectionalEdges) {
+  uint32_t i, j, u, v, a, b;
+  Edge e;
 
-    i = graph->nedges;
-    j = graph->nvtxs;
+  i = graph->nedges;
+  j = graph->nvtxs;
 
-    host_edges.resize(i);
+  host_edges.resize(i);
 
-    if (host_edges.size() != i){
-        printf("Insufficient memory, data lost");
-        exit(0);
+  if (host_edges.size() != i) {
+    printf("Insufficient memory, data lost");
+    exit(0);
+  }
+
+  uint32_t edc = 0;
+
+  for (a = 0; a < j; a++) {
+    uint32_t n = graph->xadj[a + 1];
+    for (b = graph->xadj[a]; b < n; b++) {
+
+      u = a;
+      v = graph->adjncy[b];
+
+      if (removeBidirectionalEdges && ((ugtv && u < v) || (!ugtv && u > v)))
+        continue; // take only one of the two [u, v] [v, u] edges
+
+      e.u = u;
+      e.v = v;
+      host_edges[edc++] = e;
     }
+  }
 
-    uint32_t edc = 0;
+  *nvtxs = j;
+  *nedges = edc;
 
-    for (a = 0; a < j; a++){
-        uint32_t n = graph->xadj[a + 1];
-        for (b = graph->xadj[a]; b < n; b++){
-
-            u = a;
-            v = graph->adjncy[b];
-
-            if (removeBidirectionalEdges && ((ugtv && u < v) || (!ugtv && u > v)))
-                continue; // take only one of the two [u, v] [v, u] edges
-
-            e.u = u;
-            e.v = v;
-            host_edges[edc++] = e;
-        }
-    }
-
-    *nvtxs = j;
-    *nedges = edc;
-
-    host_edges.resize(edc);
+  host_edges.resize(edc);
 }
 
 #endif // __CC_LOAD_H

@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -36,42 +36,38 @@
 #include <cuda_runtime.h>
 #include <vector_types.h>
 
-namespace groute
-{
-    static void HandleError(const char *file, int line, cudaError_t err)
-    {
-        printf("ERROR in %s:%d: %s (%d)\n", file, line, 
-               cudaGetErrorString(err), err);
-        exit(1);
-    }
+namespace groute {
+static void HandleError(const char *file, int line, cudaError_t err) {
+  printf("ERROR in %s:%d: %s (%d)\n", file, line, cudaGetErrorString(err), err);
+  exit(1);
+}
 
-    static void HandleError(const char *file, int line, CUresult err)
-    {
-        const char *err_str;
-        cuGetErrorString(err, &err_str);
+static void HandleError(const char *file, int line, CUresult err) {
+  const char *err_str;
+  cuGetErrorString(err, &err_str);
 
-        printf("ERROR in %s:%d: %s (%d)\n", file, line, 
-               err_str == nullptr ? "UNKNOWN ERROR VALUE" : err_str, err);
-        exit(1);
-    }
+  printf("ERROR in %s:%d: %s (%d)\n", file, line,
+         err_str == nullptr ? "UNKNOWN ERROR VALUE" : err_str, err);
+  exit(1);
+}
 
-    // CUDA assertions
-#define GROUTE_CUDA_CHECK(err) do {                                  \
-    cudaError_t errr = (err);                                        \
-    if(errr != cudaSuccess)                                          \
-    {                                                                \
-        ::groute::HandleError(__FILE__, __LINE__, errr);             \
-    }                                                                \
-} while(0)
+// CUDA assertions
+#define GROUTE_CUDA_CHECK(err)                                                 \
+  do {                                                                         \
+    cudaError_t errr = (err);                                                  \
+    if (errr != cudaSuccess) {                                                 \
+      ::groute::HandleError(__FILE__, __LINE__, errr);                         \
+    }                                                                          \
+  } while (0)
 
-#define GROUTE_CUDA_DAPI_CHECK(err) do {                             \
-    CUresult errr = (err);                                           \
-    if(errr != ::CUDA_SUCCESS)                                       \
-    {                                                                \
-        ::groute::HandleError(__FILE__, __LINE__, errr);             \
-    }                                                                \
-} while(0)
+#define GROUTE_CUDA_DAPI_CHECK(err)                                            \
+  do {                                                                         \
+    CUresult errr = (err);                                                     \
+    if (errr != ::CUDA_SUCCESS) {                                              \
+      ::groute::HandleError(__FILE__, __LINE__, errr);                         \
+    }                                                                          \
+  } while (0)
 
-}  // namespace groute
+} // namespace groute
 
-#endif  // __GROUTE_CUDA_UTILS_HPP_
+#endif // __GROUTE_CUDA_UTILS_HPP_

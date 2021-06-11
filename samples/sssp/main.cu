@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -32,10 +32,9 @@
 
 #include <iostream>
 
-#include <utils/utils.h>
-#include <utils/interactor.h>
 #include <utils/app_skeleton.h>
-
+#include <utils/interactor.h>
+#include <utils/utils.h>
 
 DEFINE_bool(nf, false, "Run the Near-Far SSSP solver");
 
@@ -48,44 +47,36 @@ bool TestSSSPSingle();
 
 void CleanupGraphs();
 
+namespace sssp {
+struct App {
+  static const char *Name() { return FLAGS_nf ? "sssp-nf" : "sssp"; }
+  static const char *NameUpper() { return FLAGS_nf ? "SSSP-nf" : "SSSP"; }
 
-namespace sssp
-{
-    struct App
-    {
-        static const char* Name()       { return FLAGS_nf ? "sssp-nf" : "sssp"; }
-        static const char* NameUpper()  { return FLAGS_nf ? "SSSP-nf" : "SSSP"; }
+  static bool Single() {
+    return FLAGS_nf ? TestSSSPSingle__NF__() : TestSSSPSingle();
+  }
 
-        static bool Single()
-        {
-            return FLAGS_nf ? TestSSSPSingle__NF__() : TestSSSPSingle();
-        }
+  static bool AsyncMulti(int G) {
+    return FLAGS_opt  ? TestSSSPAsyncMultiOptimized(G)
+           : FLAGS_nf ? TestSSSPAsyncMulti__NF__(G)
+                      : TestSSSPAsyncMulti(G);
+  }
 
-        static bool AsyncMulti(int G)
-        {
-            return FLAGS_opt 
-                ? TestSSSPAsyncMultiOptimized(G)
-                : FLAGS_nf 
-                    ? TestSSSPAsyncMulti__NF__(G) 
-                    : TestSSSPAsyncMulti(G);
-        }
+  static void Cleanup() { CleanupGraphs(); }
+};
+} // namespace sssp
 
-        static void Cleanup()           { CleanupGraphs(); }
-    };
-}
+int main(int argc, char **argv) {
+  Skeleton<sssp::App> app;
+  int exit = app(argc, argv);
 
-int main(int argc, char **argv)
-{
-    Skeleton<sssp::App> app;
-    int exit = app(argc, argv);
+  // cudaDeviceReset must be called before exiting in order for profiling and
+  // tracing tools such as Nsight and Visual Profiler to show complete traces.
+  cudaError_t cudaStatus = cudaDeviceReset();
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaDeviceReset failed!");
+    return 1;
+  }
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaError_t cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
-
-    return exit;
+  return exit;
 }

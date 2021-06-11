@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -42,65 +42,51 @@
 //////////////////////////////////////////////////////////////////////////////
 // Converts values to printable integers
 
-template <typename T>
-__host__ __device__ inline int ToPrintable(const T& val)
-{
-    return (int)val;
+template <typename T> __host__ __device__ inline int ToPrintable(const T &val) {
+  return (int)val;
 }
 
 template <>
-__host__ __device__ inline int ToPrintable<float4>(const float4& val)
-{
-    return (int)val.x;
+__host__ __device__ inline int ToPrintable<float4>(const float4 &val) {
+  return (int)val.x;
 }
 
-template <>
-__host__ __device__ inline int ToPrintable<int3>(const int3& val)
-{
-    return (int)val.x;
+template <> __host__ __device__ inline int ToPrintable<int3>(const int3 &val) {
+  return (int)val.x;
 }
 
 //////////////////////////////////////////////////////////////////////////////
 // Initializes values for various types
 
-template <typename T>
-__host__ __device__  inline T Initialize(int value)
-{
-    return T(value);
+template <typename T> __host__ __device__ inline T Initialize(int value) {
+  return T(value);
 }
 
-template <>
-__host__ __device__ inline int3 Initialize<int3>(int value)
-{
-    return make_int3(value, value, value);
+template <> __host__ __device__ inline int3 Initialize<int3>(int value) {
+  return make_int3(value, value, value);
 }
 
-template <>
-__host__ __device__ inline float4 Initialize<float4>(int value)
-{
-    return make_float4((float)value, (float)value, (float)value, (float)value);
+template <> __host__ __device__ inline float4 Initialize<float4>(int value) {
+  return make_float4((float)value, (float)value, (float)value, (float)value);
 }
 
-__host__ __device__ inline bool operator==(const int3& a, const int3& b)
-{
-    return a.x == b.x && a.y == b.y && a.z == b.z;
+__host__ __device__ inline bool operator==(const int3 &a, const int3 &b) {
+  return a.x == b.x && a.y == b.y && a.z == b.z;
 }
 
-__host__ __device__ inline int3& operator+=(int3& lhs, const int3& rhs)
-{
-    lhs.x += rhs.x;
-    lhs.y += rhs.y;
-    lhs.z += rhs.z;
-    return lhs;
+__host__ __device__ inline int3 &operator+=(int3 &lhs, const int3 &rhs) {
+  lhs.x += rhs.x;
+  lhs.y += rhs.y;
+  lhs.z += rhs.z;
+  return lhs;
 }
 
-__host__ __device__ inline float4& operator+=(float4& lhs, const float4& rhs)
-{
-    lhs.x += rhs.x;
-    lhs.y += rhs.y;
-    lhs.z += rhs.z;
-    lhs.w += rhs.w;
-    return lhs;
+__host__ __device__ inline float4 &operator+=(float4 &lhs, const float4 &rhs) {
+  lhs.x += rhs.x;
+  lhs.y += rhs.y;
+  lhs.z += rhs.z;
+  lhs.w += rhs.w;
+  return lhs;
 }
 
 #endif // __CUDA_GTEST_UTILS_H_

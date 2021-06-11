@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -29,62 +29,60 @@
 #include <chrono>
 #include <cstdio>
 
-#include <gtest/gtest.h>
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
-#include <utils/cuda_utils.h>
-#include <groute/internal/worker.h>
 #include <groute/event_pool.h>
-
+#include <groute/internal/worker.h>
+#include <utils/cuda_utils.h>
 
 typedef utils::SharedArray<int> SharedArray;
 typedef utils::SharedValue<int> SharedValue;
 
+TEST(Microbenchmarks, HighPriorityCopy) {
+  cudaSetDevice(0);
 
-TEST(Microbenchmarks, HighPriorityCopy)
-{
+  groute::Stream stream;
+  groute::Stream highprio_stream(groute::SP_High);
+
+  SharedArray arr(100 * 1024 * 1024); // 100 MB array
+  SharedValue val;
+
+  groute::internal::Barrier bar(2);
+
+  std::chrono::system_clock::time_point t1, t2, t3;
+
+  std::thread highprio_sync([&val, &highprio_stream, &bar, &t2] {
     cudaSetDevice(0);
-    
-    groute::Stream stream;
-    groute::Stream highprio_stream(groute::SP_High);
-
-    SharedArray arr(100 * 1024 * 1024); // 100 MB array
-    SharedValue val;
-
-    groute::internal::Barrier bar(2);
-
-    std::chrono::system_clock::time_point t1, t2, t3; 
-
-    std::thread highprio_sync([&val, &highprio_stream, &bar, &t2] 
-    {
-        cudaSetDevice(0);
-
-        bar.Sync();
-        bar.Sync();
-
-        val.D2HAsync(highprio_stream.cuda_stream);
-        highprio_stream.Sync();
-        t2 = std::chrono::high_resolution_clock::now();
-    });
-    
-    bar.Sync();
-
-    t1 = std::chrono::high_resolution_clock::now();
-
-    arr.D2HAsync(stream.cuda_stream);
 
     bar.Sync();
+    bar.Sync();
 
-    stream.Sync();
-    t3 = std::chrono::high_resolution_clock::now();
+    val.D2HAsync(highprio_stream.cuda_stream);
+    highprio_stream.Sync();
+    t2 = std::chrono::high_resolution_clock::now();
+  });
 
-    highprio_sync.join();
+  bar.Sync();
 
-    double ms_copy_time = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t1).count() / 1000.0;
-    double ms_flag_time = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0;
+  t1 = std::chrono::high_resolution_clock::now();
 
-    std::cout 
-        << "Copy time (100 MB) " << ms_copy_time << " ms.\n"
-        << "Copy time (4B Flag) " << ms_flag_time << " ms.\n";
+  arr.D2HAsync(stream.cuda_stream);
+
+  bar.Sync();
+
+  stream.Sync();
+  t3 = std::chrono::high_resolution_clock::now();
+
+  highprio_sync.join();
+
+  double ms_copy_time =
+      std::chrono::duration_cast<std::chrono::microseconds>(t3 - t1).count() /
+      1000.0;
+  double ms_flag_time =
+      std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() /
+      1000.0;
+
+  std::cout << "Copy time (100 MB) " << ms_copy_time << " ms.\n"
+            << "Copy time (4B Flag) " << ms_flag_time << " ms.\n";
 }
-

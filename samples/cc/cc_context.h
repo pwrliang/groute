@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -29,9 +29,9 @@
 #ifndef __CC_CONTEXT_H
 #define __CC_CONTEXT_H
 
-#include <vector>
-#include <map>
 #include <cuda_runtime.h>
+#include <map>
+#include <vector>
 
 #include <groute/internal/cuda_utils.h>
 
@@ -42,9 +42,7 @@
 
 #include "cc_load.h"
 
-
 #include <gflags/gflags.h>
-
 
 #ifndef NDEBUG
 #define VERBOSE true
@@ -58,53 +56,59 @@ DEFINE_string(graphfile, "", "A file with a graph in Dimacs 10 format");
 DEFINE_bool(ggr, true, "Graph file is a Galois binary GR file");
 DEFINE_bool(verbose, VERBOSE, "Verbose prints");
 DEFINE_int32(repetitions, REPETITIONS_DEFAULT, "Repetitions of GPU tests");
-DEFINE_bool(undirected, true, "The input graph is undirected (one of each bidirectional edges will be removed)");
+DEFINE_bool(undirected, true,
+            "The input graph is undirected (one of each bidirectional edges "
+            "will be removed)");
 
-namespace cc
+namespace cc {
+class Context
+    : public groute::Context // the global context for the cc problem solving
 {
-    class Context : public groute::Context // the global context for the cc problem solving  
-    {
-    public:
-        groute::pinned_vector<groute::graphs::Edge>   host_edges;
-        std::vector<int>            host_parents;
+public:
+  groute::pinned_vector<groute::graphs::Edge> host_edges;
+  std::vector<int> host_parents;
 
-        int ngpus;
-        unsigned int nvtxs, nedges;
-        
-        Context(std::string &graphfile, bool ggr, bool verbose, int ngpus) : 
-            groute::Context(ngpus), ngpus(ngpus)
-        {
-            graph_t *graph;
+  int ngpus;
+  unsigned int nvtxs, nedges;
 
-            if (graphfile == "") {
-                printf("A Graph File must be provided\n");
-                exit(0);
-            }
+  Context(std::string &graphfile, bool ggr, bool verbose, int ngpus)
+      : groute::Context(ngpus), ngpus(ngpus) {
+    graph_t *graph;
 
-            printf("\nLoading graph %s (%d)\n", graphfile.substr(graphfile.find_last_of('\\') + 1).c_str(), ggr);
-            graph = GetCachedGraph(graphfile, ggr);
+    if (graphfile == "") {
+      printf("A Graph File must be provided\n");
+      exit(0);
+    }
 
-            if (graph->nvtxs == 0) {
-                printf("Empty graph!\n");
-                exit(0);
-            }
+    printf("\nLoading graph %s (%d)\n",
+           graphfile.substr(graphfile.find_last_of('\\') + 1).c_str(), ggr);
+    graph = GetCachedGraph(graphfile, ggr);
 
-            printf("\n----- Running CC Async -----\n\n");
+    if (graph->nvtxs == 0) {
+      printf("Empty graph!\n");
+      exit(0);
+    }
 
-            if (FLAGS_verbose)
-            {
-                if (!FLAGS_undirected)  printf("undirected=false, expecting a directed (not symmetric) graph, keeping all edges\n");
-                else                    printf("undirected=true,  expecting an undirected (symmetric) graph, removing bidirectional edges\n");
-            }
+    printf("\n----- Running CC Async -----\n\n");
 
-            LoadGraph(host_edges, &nvtxs, &nedges, graph, false, FLAGS_undirected);
-            host_parents.resize(nvtxs);
+    if (FLAGS_verbose) {
+      if (!FLAGS_undirected)
+        printf("undirected=false, expecting a directed (not symmetric) graph, "
+               "keeping all edges\n");
+      else
+        printf("undirected=true,  expecting an undirected (symmetric) graph, "
+               "removing bidirectional edges\n");
+    }
 
-            if (verbose) {
-                printf("The graph has %d vertices, and %d edges (average degree: %f)\n", nvtxs, nedges, (float)nedges / nvtxs);
-            }
-        }
-    };
-}
+    LoadGraph(host_edges, &nvtxs, &nedges, graph, false, FLAGS_undirected);
+    host_parents.resize(nvtxs);
+
+    if (verbose) {
+      printf("The graph has %d vertices, and %d edges (average degree: %f)\n",
+             nvtxs, nedges, (float)nedges / nvtxs);
+    }
+  }
+};
+} // namespace cc
 
 #endif // __CC_CONTEXT_H

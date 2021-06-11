@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -29,43 +29,41 @@
 #include <chrono>
 #include <cstdio>
 
-#include <gtest/gtest.h>
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #define REPETITIONS 100
 #define MS_TIME 13
 
-__global__ void Timed(unsigned long long clocks)
-{
-    unsigned long long target = clock64() + clocks;
-    while(clock64() < target);
+__global__ void Timed(unsigned long long clocks) {
+  unsigned long long target = clock64() + clocks;
+  while (clock64() < target)
+    ;
 }
 
-TEST(Microbenchmarks, TimedKernel)
-{
-    int dev = 0;
-    cudaDeviceProp props;
-    cudaGetDevice(&dev);
-    cudaGetDeviceProperties(&props, dev);
+TEST(Microbenchmarks, TimedKernel) {
+  int dev = 0;
+  cudaDeviceProp props;
+  cudaGetDevice(&dev);
+  cudaGetDeviceProperties(&props, dev);
 
-    float actual_time = ((float)MS_TIME * 1000.0f) *
-        ((float)props.clockRate / 1024.0f);
-    
-    cudaDeviceSynchronize();
-    auto t1 = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < REPETITIONS; ++i)
-    {
-        Timed<<<500, 32>>>((unsigned long long)actual_time);
-    }
-    cudaDeviceSynchronize();
-    auto t2 = std::chrono::high_resolution_clock::now();
+  float actual_time =
+      ((float)MS_TIME * 1000.0f) * ((float)props.clockRate / 1024.0f);
 
-    double mstime = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() / 1000.0 / REPETITIONS;
+  cudaDeviceSynchronize();
+  auto t1 = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < REPETITIONS; ++i) {
+    Timed<<<500, 32>>>((unsigned long long)actual_time);
+  }
+  cudaDeviceSynchronize();
+  auto t2 = std::chrono::high_resolution_clock::now();
 
-    printf("Kernel length: %f ms\n", mstime);
-    
-    ASSERT_LE(fabs(mstime - MS_TIME), 1.0f)
-        << "The kernel took "
-        << mstime << " ms instead of " << MS_TIME;
+  double mstime =
+      std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() /
+      1000.0 / REPETITIONS;
+
+  printf("Kernel length: %f ms\n", mstime);
+
+  ASSERT_LE(fabs(mstime - MS_TIME), 1.0f)
+      << "The kernel took " << mstime << " ms instead of " << MS_TIME;
 }
-

@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -30,19 +30,19 @@
 #ifndef __GROUTE_GROUTE_H
 #define __GROUTE_GROUTE_H
 
-#include <vector>
-#include <map>
-#include <set>
-#include <memory>
-#include <future>
 #include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <set>
+#include <vector>
 
 #include <cuda_runtime.h>
 
-#include <groute/context.h>
 #include <groute/communication.h>
-#include <groute/router.h>
-#include <groute/policy.h>
+#include <groute/context.h>
 #include <groute/link.h>
+#include <groute/policy.h>
+#include <groute/router.h>
 
 #endif // __GROUTE_GROUTE_H

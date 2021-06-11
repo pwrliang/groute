@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -30,433 +30,366 @@
 #ifndef __GROUTE_EVPOOL_H
 #define __GROUTE_EVPOOL_H
 
+#include <cassert>
+#include <cuda_runtime.h>
 #include <initializer_list>
-#include <vector>
 #include <map>
 #include <memory>
-#include <cuda_runtime.h>
 #include <mutex>
-#include <cassert>
+#include <vector>
 
 #include <groute/internal/cuda_utils.h>
-#include <groute/internal/worker.h>
 #include <groute/internal/pinned_allocation.h>
+#include <groute/internal/worker.h>
 
 #include <groute/common.h>
 
 namespace groute {
 
-    struct IEvent
-    {
-        virtual ~IEvent() { }
+struct IEvent {
+  virtual ~IEvent() {}
 
-        virtual void Wait(cudaStream_t stream) const = 0;
-        virtual void Sync() const = 0;
-        virtual bool Query() const = 0;
-    };
+  virtual void Wait(cudaStream_t stream) const = 0;
+  virtual void Sync() const = 0;
+  virtual bool Query() const = 0;
+};
 
-    class EventHolder : public IEvent
-    {
-    private:
-        const cudaEvent_t cuda_event;
-        std::function<void(cudaEvent_t)> m_releaser;
+class EventHolder : public IEvent {
+private:
+  const cudaEvent_t cuda_event;
+  std::function<void(cudaEvent_t)> m_releaser;
 
-    public:
-        EventHolder(cudaEvent_t cuda_event, const std::function<void(cudaEvent_t)>& releaser) : 
-            cuda_event(cuda_event), m_releaser(releaser)
-        {
-        }
+public:
+  EventHolder(cudaEvent_t cuda_event,
+              const std::function<void(cudaEvent_t)> &releaser)
+      : cuda_event(cuda_event), m_releaser(releaser) {}
 
-        ~EventHolder()
-        {
-            m_releaser(cuda_event);
-        }
+  ~EventHolder() { m_releaser(cuda_event); }
 
-        void Wait(cudaStream_t stream) const override 
-        {
-            GROUTE_CUDA_CHECK(cudaStreamWaitEvent(stream, cuda_event, 0));
-        }
+  void Wait(cudaStream_t stream) const override {
+    GROUTE_CUDA_CHECK(cudaStreamWaitEvent(stream, cuda_event, 0));
+  }
 
-        void Sync() const override 
-        {
-            GROUTE_CUDA_CHECK(cudaEventSynchronize(cuda_event));
-        }
+  void Sync() const override {
+    GROUTE_CUDA_CHECK(cudaEventSynchronize(cuda_event));
+  }
 
-        bool Query() const override 
-        {
-            return cudaEventQuery(cuda_event) == cudaSuccess;
-        }
-    };
+  bool Query() const override {
+    return cudaEventQuery(cuda_event) == cudaSuccess;
+  }
+};
 
-    class Event
-    {
-    private:
-        std::shared_ptr<IEvent> m_internal_event;
+class Event {
+private:
+  std::shared_ptr<IEvent> m_internal_event;
 
-    public:
-        Event(cudaEvent_t cuda_event, const std::function<void(cudaEvent_t)>& releaser)
-        {
-            assert(cuda_event != nullptr);
-            assert(releaser != nullptr);
+public:
+  Event(cudaEvent_t cuda_event,
+        const std::function<void(cudaEvent_t)> &releaser) {
+    assert(cuda_event != nullptr);
+    assert(releaser != nullptr);
 
-            m_internal_event = std::make_shared<EventHolder>(cuda_event, releaser);
-        }
+    m_internal_event = std::make_shared<EventHolder>(cuda_event, releaser);
+  }
 
-        Event() : m_internal_event(nullptr) // dummy event
-        {
-        }
-        
-        Event(const Event& other) : m_internal_event(other.m_internal_event)
-        {
-            
-        }
+  Event()
+      : m_internal_event(nullptr) // dummy event
+  {}
 
-        Event(Event&& other) : m_internal_event(std::move(other.m_internal_event))
-        {
-        }
+  Event(const Event &other) : m_internal_event(other.m_internal_event) {}
 
-        Event& operator=(Event&& other) 
-        {
-            this->m_internal_event = std::move(other.m_internal_event);
-            return *this;
-        }
+  Event(Event &&other) : m_internal_event(std::move(other.m_internal_event)) {}
 
-        Event& operator=(const Event& other)
-        {
-            m_internal_event = other.m_internal_event;
-            return *this;
-        }
+  Event &operator=(Event &&other) {
+    this->m_internal_event = std::move(other.m_internal_event);
+    return *this;
+  }
 
-        Event(std::shared_ptr<IEvent> internal_event) : m_internal_event(internal_event)
-        {
-        }
+  Event &operator=(const Event &other) {
+    m_internal_event = other.m_internal_event;
+    return *this;
+  }
 
-        static Event Record(cudaStream_t stream)
-        {
-            cudaEvent_t cuda_event;
-            GROUTE_CUDA_CHECK(cudaEventCreateWithFlags(&cuda_event, cudaEventDisableTiming));
-            GROUTE_CUDA_CHECK(cudaEventRecord(cuda_event, stream));
+  Event(std::shared_ptr<IEvent> internal_event)
+      : m_internal_event(internal_event) {}
 
-            return Event(
-                cuda_event, 
-                [](cudaEvent_t ev) // releaser, called on destruction event
-                {
-                    GROUTE_CUDA_CHECK(cudaEventDestroy(ev));
-                }
-            );
-        }
+  static Event Record(cudaStream_t stream) {
+    cudaEvent_t cuda_event;
+    GROUTE_CUDA_CHECK(
+        cudaEventCreateWithFlags(&cuda_event, cudaEventDisableTiming));
+    GROUTE_CUDA_CHECK(cudaEventRecord(cuda_event, stream));
 
-        void Wait(cudaStream_t stream) const
-        {
-            if (m_internal_event == nullptr) return; // dummy event
-            m_internal_event->Wait(stream);
-        }
+    return Event(cuda_event,
+                 [](cudaEvent_t ev) // releaser, called on destruction event
+                 { GROUTE_CUDA_CHECK(cudaEventDestroy(ev)); });
+  }
 
-        void Sync() const
-        {
-            if (m_internal_event == nullptr) return; // dummy event
-            m_internal_event->Sync();
-        }
+  void Wait(cudaStream_t stream) const {
+    if (m_internal_event == nullptr)
+      return; // dummy event
+    m_internal_event->Wait(stream);
+  }
 
-        bool Query() const
-        {
-            if (m_internal_event == nullptr) return true; // dummy event
-            return m_internal_event->Query();
-        }
-    };
+  void Sync() const {
+    if (m_internal_event == nullptr)
+      return; // dummy event
+    m_internal_event->Sync();
+  }
 
-    class EventGroup : public IEvent
-    {
-    private:
-        std::vector<Event> m_internal_events;
+  bool Query() const {
+    if (m_internal_event == nullptr)
+      return true; // dummy event
+    return m_internal_event->Query();
+  }
+};
 
-    public:
-        EventGroup()
-        {
-        }
+class EventGroup : public IEvent {
+private:
+  std::vector<Event> m_internal_events;
 
-        ~EventGroup()
-        {
-        }
+public:
+  EventGroup() {}
 
-        static Event Create(const std::vector<Event>& evs)
-        {
-            auto ev_group = std::make_shared<EventGroup>();
-            ev_group->m_internal_events = evs;
-            return Event(ev_group);
-        }
+  ~EventGroup() {}
 
-        void Add(Event ev)
-        {
-            m_internal_events.push_back(ev);
-        }
+  static Event Create(const std::vector<Event> &evs) {
+    auto ev_group = std::make_shared<EventGroup>();
+    ev_group->m_internal_events = evs;
+    return Event(ev_group);
+  }
 
-        void Merge(EventGroup& other)
-        {
-            for (auto& ev : other.m_internal_events)
-            {
-                m_internal_events.push_back(std::move(ev));
-            }
+  void Add(Event ev) { m_internal_events.push_back(ev); }
 
-            other.m_internal_events.clear();
-        }
+  void Merge(EventGroup &other) {
+    for (auto &ev : other.m_internal_events) {
+      m_internal_events.push_back(std::move(ev));
+    }
 
-        void Wait(cudaStream_t stream) const override 
-        {
-            for (auto& ev : m_internal_events)
-            {
-                ev.Wait(stream);
-            }
-        }
+    other.m_internal_events.clear();
+  }
 
-        void Sync() const override 
-        {
-            for (auto& ev : m_internal_events)
-            {
-                ev.Sync();
-            }
-        }
+  void Wait(cudaStream_t stream) const override {
+    for (auto &ev : m_internal_events) {
+      ev.Wait(stream);
+    }
+  }
 
-        bool Query() const override 
-        {
-            for (auto& ev : m_internal_events)
-            {
-                if (!ev.Query()) return false;
-            }
-            return true;
-        }
-    };
+  void Sync() const override {
+    for (auto &ev : m_internal_events) {
+      ev.Sync();
+    }
+  }
 
-    /**
-    * @brief A simple helper class for aggregating events with some pre known count until setting a promise
-    */
-    class AggregatedEventPromise
-    {
-    private:
-        std::promise<Event> m_promise;
-        std::shared_future<Event> m_shared_future;
-        std::shared_ptr<EventGroup> m_ev_group;
-    
-        int m_reporters_count;
-        mutable std::mutex m_mutex;
-    
-        void Complete()
-        {
-            assert(!is_ready(m_shared_future));
-            m_promise.set_value(Event(m_ev_group));
-        }
-    
-    public:
-        AggregatedEventPromise(int reporters_count = 0) : m_reporters_count(reporters_count)
-        {
-            m_ev_group = std::make_shared<EventGroup>();
-            m_shared_future = m_promise.get_future();
-        }
-    
-        ~AggregatedEventPromise()
-        {
-            assert(is_ready(m_shared_future));
-        }
-    
-        std::shared_future<Event> GetFuture() const
-        {
-            return m_shared_future;
-        }
-    
-        void SetReportersCount(int reporters_count)
-        {
-            m_reporters_count = reporters_count;
-        }
-    
-        void Report(EventGroup& group)
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_ev_group->Merge(group);
-            if (--m_reporters_count == 0) Complete();
-        }
-    };
+  bool Query() const override {
+    for (auto &ev : m_internal_events) {
+      if (!ev.Query())
+        return false;
+    }
+    return true;
+  }
+};
 
-    /**
-    * @brief Event-pool for managing and recycling per device cuda events
-    */
-    class EventPool
-    {
-    private:
-        std::vector<cudaEvent_t> m_events;
-        std::deque<cudaEvent_t> m_pool;
+/**
+ * @brief A simple helper class for aggregating events with some pre known count
+ * until setting a promise
+ */
+class AggregatedEventPromise {
+private:
+  std::promise<Event> m_promise;
+  std::shared_future<Event> m_shared_future;
+  std::shared_ptr<EventGroup> m_ev_group;
 
-        int m_dev_id; // the real device id
-        mutable std::mutex m_mutex;
+  int m_reporters_count;
+  mutable std::mutex m_mutex;
 
-        void VerifyDev() const
-        {
+  void Complete() {
+    assert(!is_ready(m_shared_future));
+    m_promise.set_value(Event(m_ev_group));
+  }
+
+public:
+  AggregatedEventPromise(int reporters_count = 0)
+      : m_reporters_count(reporters_count) {
+    m_ev_group = std::make_shared<EventGroup>();
+    m_shared_future = m_promise.get_future();
+  }
+
+  ~AggregatedEventPromise() { assert(is_ready(m_shared_future)); }
+
+  std::shared_future<Event> GetFuture() const { return m_shared_future; }
+
+  void SetReportersCount(int reporters_count) {
+    m_reporters_count = reporters_count;
+  }
+
+  void Report(EventGroup &group) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_ev_group->Merge(group);
+    if (--m_reporters_count == 0)
+      Complete();
+  }
+};
+
+/**
+ * @brief Event-pool for managing and recycling per device cuda events
+ */
+class EventPool {
+private:
+  std::vector<cudaEvent_t> m_events;
+  std::deque<cudaEvent_t> m_pool;
+
+  int m_dev_id; // the real device id
+  mutable std::mutex m_mutex;
+
+  void VerifyDev() const {
 #ifndef NDEBUG
-            int actual_dev;
-            GROUTE_CUDA_CHECK(cudaGetDevice(&actual_dev));
-            if(actual_dev != m_dev_id)
-            {
-                printf("\nWarning: actual dev: %d, expected dev: %d\n", actual_dev, m_dev_id);
-            }
+    int actual_dev;
+    GROUTE_CUDA_CHECK(cudaGetDevice(&actual_dev));
+    if (actual_dev != m_dev_id) {
+      printf("\nWarning: actual dev: %d, expected dev: %d\n", actual_dev,
+             m_dev_id);
+    }
 #endif
-        }
+  }
 
-        cudaEvent_t Create() const
-        {
-            VerifyDev();
+  cudaEvent_t Create() const {
+    VerifyDev();
 
-            cudaEvent_t ev;
-            GROUTE_CUDA_CHECK(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming));
-            return ev;
-        }
+    cudaEvent_t ev;
+    GROUTE_CUDA_CHECK(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming));
+    return ev;
+  }
 
-        void Destroy(cudaEvent_t ev) const
-        {
-            GROUTE_CUDA_CHECK(cudaEventDestroy(ev));
-        }
+  void Destroy(cudaEvent_t ev) const {
+    GROUTE_CUDA_CHECK(cudaEventDestroy(ev));
+  }
 
-    public:
-        EventPool(int dev_id, size_t cached_evs = 0) : 
-            m_dev_id(dev_id)
-        {
-            m_events.reserve(cached_evs);
-            CacheEvents(cached_evs);
-        }
+public:
+  EventPool(int dev_id, size_t cached_evs = 0) : m_dev_id(dev_id) {
+    m_events.reserve(cached_evs);
+    CacheEvents(cached_evs);
+  }
 
-        void CacheEvents(size_t cached_evs)
-        {
-            GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
+  void CacheEvents(size_t cached_evs) {
+    GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
 
-            std::lock_guard<std::mutex> guard(m_mutex);
+    std::lock_guard<std::mutex> guard(m_mutex);
 
-            for (size_t i = m_events.size(); i < cached_evs; i++)
-            {
-                m_events.push_back(Create());
-                m_pool.push_back(m_events[i]);
-            }
-        }
+    for (size_t i = m_events.size(); i < cached_evs; i++) {
+      m_events.push_back(Create());
+      m_pool.push_back(m_events[i]);
+    }
+  }
 
-        int GetCachedEventsNum() const
-        {
-            std::lock_guard<std::mutex> guard(m_mutex);
-            return m_events.size();
-        }
+  int GetCachedEventsNum() const {
+    std::lock_guard<std::mutex> guard(m_mutex);
+    return m_events.size();
+  }
 
-        ~EventPool()
-        {
-            for (auto ev : m_events)
-            {
-                Destroy(ev);
-            }
-        }
+  ~EventPool() {
+    for (auto ev : m_events) {
+      Destroy(ev);
+    }
+  }
 
-        Event Record(cudaStream_t stream)
-        {
-            cudaEvent_t cuda_event;
+  Event Record(cudaStream_t stream) {
+    cudaEvent_t cuda_event;
 
-            { // guard block
-                std::lock_guard<std::mutex> guard(m_mutex);
+    { // guard block
+      std::lock_guard<std::mutex> guard(m_mutex);
 
-                if (m_pool.empty())
-                {
-                    m_events.push_back(cuda_event = Create());
-                }
-                else
-                {
-                    cuda_event = m_pool.front();
-                    m_pool.pop_front();
-                }
-            }
-            
-            VerifyDev();
+      if (m_pool.empty()) {
+        m_events.push_back(cuda_event = Create());
+      } else {
+        cuda_event = m_pool.front();
+        m_pool.pop_front();
+      }
+    }
 
-            // Record the event on the provided stream
-            // The stream must be associated with the same device as the event
-            GROUTE_CUDA_CHECK(cudaEventRecord(cuda_event, stream));
+    VerifyDev();
 
-            return Event(
-                cuda_event, 
-                [this](cudaEvent_t ev) // releaser, called on destruction of internal EventHolder
-                {
-                    std::lock_guard<std::mutex> guard(m_mutex);
-                    m_pool.push_back(ev);
-                }
-            );
-        }
-    };
+    // Record the event on the provided stream
+    // The stream must be associated with the same device as the event
+    GROUTE_CUDA_CHECK(cudaEventRecord(cuda_event, stream));
 
-    enum StreamPriority
-    {
-        SP_Default, SP_High, SP_Low
-    };
+    return Event(cuda_event,
+                 [this](cudaEvent_t ev) // releaser, called on destruction of
+                                        // internal EventHolder
+                 {
+                   std::lock_guard<std::mutex> guard(m_mutex);
+                   m_pool.push_back(ev);
+                 });
+  }
+};
 
-    class Stream
-    {
-    public:
-        cudaStream_t    cuda_stream;
-        cudaEvent_t     sync_event;
+enum StreamPriority { SP_Default, SP_High, SP_Low };
 
-        Stream(int dev_id, StreamPriority priority = SP_Default)
-        {
-            GROUTE_CUDA_CHECK(cudaSetDevice(dev_id));
-            Init(priority);
-        }
+class Stream {
+public:
+  cudaStream_t cuda_stream;
+  cudaEvent_t sync_event;
 
-        Stream(StreamPriority priority = SP_Default)
-        {
-            Init(priority);
-        }
+  Stream(int dev_id, StreamPriority priority = SP_Default) {
+    GROUTE_CUDA_CHECK(cudaSetDevice(dev_id));
+    Init(priority);
+  }
 
-        void Init(StreamPriority priority)
-        {
-            if (priority == SP_Default)
-            {
-                GROUTE_CUDA_CHECK(cudaStreamCreateWithFlags(&cuda_stream, cudaStreamNonBlocking));
-                GROUTE_CUDA_CHECK(cudaEventCreateWithFlags(&sync_event, cudaEventDisableTiming));
-            }
+  Stream(StreamPriority priority = SP_Default) { Init(priority); }
 
-            else
-            {
-                int leastPriority, greatestPriority;
-                cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority); // range: [*greatestPriority, *leastPriority]
+  void Init(StreamPriority priority) {
+    if (priority == SP_Default) {
+      GROUTE_CUDA_CHECK(
+          cudaStreamCreateWithFlags(&cuda_stream, cudaStreamNonBlocking));
+      GROUTE_CUDA_CHECK(
+          cudaEventCreateWithFlags(&sync_event, cudaEventDisableTiming));
+    }
 
-                GROUTE_CUDA_CHECK(cudaStreamCreateWithPriority(&cuda_stream, cudaStreamNonBlocking, priority == SP_High ? greatestPriority : leastPriority));
-                GROUTE_CUDA_CHECK(cudaEventCreateWithFlags(&sync_event, cudaEventDisableTiming));
-            }
-        }
+    else {
+      int leastPriority, greatestPriority;
+      cudaDeviceGetStreamPriorityRange(
+          &leastPriority,
+          &greatestPriority); // range: [*greatestPriority, *leastPriority]
 
-        Stream(const Stream& other) = delete;
+      GROUTE_CUDA_CHECK(cudaStreamCreateWithPriority(
+          &cuda_stream, cudaStreamNonBlocking,
+          priority == SP_High ? greatestPriority : leastPriority));
+      GROUTE_CUDA_CHECK(
+          cudaEventCreateWithFlags(&sync_event, cudaEventDisableTiming));
+    }
+  }
 
-        Stream(Stream&& other) : cuda_stream(other.cuda_stream), sync_event(other.sync_event)
-        {
-            other.cuda_stream = nullptr;
-            other.sync_event = nullptr;
-        }
+  Stream(const Stream &other) = delete;
 
-        Stream& operator=(const Stream& other) = delete;
+  Stream(Stream &&other)
+      : cuda_stream(other.cuda_stream), sync_event(other.sync_event) {
+    other.cuda_stream = nullptr;
+    other.sync_event = nullptr;
+  }
 
-        Stream& operator=(Stream&& other) 
-        {
-            this->cuda_stream = other.cuda_stream;
-            this->sync_event = other.sync_event;
+  Stream &operator=(const Stream &other) = delete;
 
-            other.cuda_stream = nullptr;
-            other.sync_event = nullptr;
+  Stream &operator=(Stream &&other) {
+    this->cuda_stream = other.cuda_stream;
+    this->sync_event = other.sync_event;
 
-            return *this;
-        }
+    other.cuda_stream = nullptr;
+    other.sync_event = nullptr;
 
-        ~Stream()
-        {
-            if(cuda_stream != nullptr) GROUTE_CUDA_CHECK(cudaStreamDestroy(cuda_stream));
-            if(sync_event != nullptr) GROUTE_CUDA_CHECK(cudaEventDestroy(sync_event));
-        }
+    return *this;
+  }
 
-        void Sync() const
-        {
-            GROUTE_CUDA_CHECK(cudaEventRecord(sync_event, cuda_stream));
-            GROUTE_CUDA_CHECK(cudaEventSynchronize(sync_event));
-        }
-    };
-}
+  ~Stream() {
+    if (cuda_stream != nullptr)
+      GROUTE_CUDA_CHECK(cudaStreamDestroy(cuda_stream));
+    if (sync_event != nullptr)
+      GROUTE_CUDA_CHECK(cudaEventDestroy(sync_event));
+  }
+
+  void Sync() const {
+    GROUTE_CUDA_CHECK(cudaEventRecord(sync_event, cuda_stream));
+    GROUTE_CUDA_CHECK(cudaEventSynchronize(sync_event));
+  }
+};
+} // namespace groute
 
 #endif // __GROUTE_EVPOOL_H

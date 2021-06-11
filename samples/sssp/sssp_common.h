@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -39,9 +39,14 @@
 typedef uint32_t distance_t;
 extern const distance_t INF;
 
-std::vector<distance_t> SSSPHostNaive(groute::graphs::host::CSRGraph& graph, distance_t* edge_weights, index_t source_node);
-std::vector<distance_t> SSSPHostDijkstra(groute::graphs::host::CSRGraph& graph, distance_t* edge_weights, index_t source_node);
-int SSSPCheckErrors(const std::vector<distance_t>& distances, const std::vector<distance_t>& regression);
-int SSSPOutput(const char *file, const std::vector<distance_t>& distances);
+std::vector<distance_t> SSSPHostNaive(groute::graphs::host::CSRGraph &graph,
+                                      distance_t *edge_weights,
+                                      index_t source_node);
+std::vector<distance_t> SSSPHostDijkstra(groute::graphs::host::CSRGraph &graph,
+                                         distance_t *edge_weights,
+                                         index_t source_node);
+int SSSPCheckErrors(const std::vector<distance_t> &distances,
+                    const std::vector<distance_t> &regression);
+int SSSPOutput(const char *file, const std::vector<distance_t> &distances);
 
 #endif // __SSSP_COMMON_H

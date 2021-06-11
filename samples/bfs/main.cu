@@ -11,7 +11,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
-// * Neither the names of the copyright holders nor the names of its 
+// * Neither the names of the copyright holders nor the names of its
 //   contributors may be used to endorse or promote products derived from this
 //   software without specific prior written permission.
 //
@@ -30,8 +30,8 @@
 #include <cuda_runtime.h>
 #include <gflags/gflags.h>
 
-#include <utils/utils.h>
 #include <utils/app_skeleton.h>
+#include <utils/utils.h>
 
 bool TestBFSSingle();
 bool TestBFSAsyncMulti(int ngpus);
@@ -39,38 +39,32 @@ bool TestBFSAsyncMultiOptimized(int ngpus);
 
 void CleanupGraphs();
 
-namespace bfs
-{
-    struct App
-    {
-        static const char* Name()       { return "bfs"; }
-        static const char* NameUpper()  { return "BFS"; }
+namespace bfs {
+struct App {
+  static const char *Name() { return "bfs"; }
+  static const char *NameUpper() { return "BFS"; }
 
-        static bool Single()            { return TestBFSSingle(); }
+  static bool Single() { return TestBFSSingle(); }
 
-        static bool AsyncMulti(int G)
-        {
-            return FLAGS_opt ? TestBFSAsyncMultiOptimized(G) : TestBFSAsyncMulti(G);
-        }
+  static bool AsyncMulti(int G) {
+    return FLAGS_opt ? TestBFSAsyncMultiOptimized(G) : TestBFSAsyncMulti(G);
+  }
 
-        static void Cleanup()           { CleanupGraphs(); }
-    };
+  static void Cleanup() { CleanupGraphs(); }
+};
+} // namespace bfs
+
+int main(int argc, char **argv) {
+  Skeleton<bfs::App> app;
+  int exit = app(argc, argv);
+
+  // cudaDeviceReset must be called before exiting in order for profiling and
+  // tracing tools such as Nsight and Visual Profiler to show complete traces.
+  cudaError_t cudaStatus = cudaDeviceReset();
+  if (cudaStatus != cudaSuccess) {
+    fprintf(stderr, "cudaDeviceReset failed!");
+    return 1;
+  }
+
+  return exit;
 }
-
-int main(int argc, char **argv)
-{
-    Skeleton<bfs::App> app;
-    int exit = app(argc, argv);
-
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaError_t cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
-
-    return exit;
-}
-
-

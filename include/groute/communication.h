@@ -202,6 +202,7 @@ public:
     return pseg;
   }
 
+  // return pending segment to m_promised_segments
   void ReleaseBuffer(const Segment<T> &segment,
                      const Event &ready_event) override {
     T *buffer = segment.GetSegmentPtr();

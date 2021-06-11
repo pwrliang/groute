@@ -187,7 +187,7 @@ void TestHistogramWorklist(int ngpus, size_t histo_size, size_t work_size) {
 
       auto input_fut = input_receivers[i]->Receive();
       auto input_seg = input_fut.get();
-
+      // Add counter
       distributed_worklist.ReportWork(input_seg.GetSegmentSize());
 
       barrier.Sync();
@@ -223,7 +223,7 @@ void TestHistogramWorklist(int ngpus, size_t histo_size, size_t work_size) {
           total_segs_size += seg.GetSegmentSize();
         }
 
-        // report work
+        // report work because the tasks are consumed
         distributed_worklist.ReportWork(-(int)total_segs_size);
       }
 

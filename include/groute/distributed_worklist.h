@@ -365,14 +365,19 @@ private:
 
       // queue a wait on stream
       seg.Wait(stream.cuda_stream);
+
+      // m_local_input_worklist will be consumed by outer caller
+      // m_pass_remote_output_worklist will be sent by SendLoop
       SplitReceive(seg, m_local_input_worklist, m_pass_remote_output_worklist,
                    stream);
-
+      // generate an event for synchronizing purpose
       Event split_ev = m_context.RecordEvent(m_dev, stream.cuda_stream);
-
+      // We use split_ev to let the deeper function to know that SplitReceive is
+      // done
       m_link_in.ReleaseBuffer(seg, split_ev);
 
-      // Signal
+      // Signal SendLoop that it can send m_pass_remote_output_worklist with
+      // link_out
       {
         std::lock_guard<std::mutex> guard(m_send_mutex);
         m_pass_remote_work = true;
@@ -380,6 +385,8 @@ private:
         m_send_cv.notify_one();
       }
 
+      // Notify the GetLocalWork function that we got available data in
+      // m_local_input_worklist
       {
         std::lock_guard<std::mutex> guard(m_receive_mutex);
         m_receive_work = true;
@@ -417,40 +424,40 @@ private:
       {
         std::unique_lock<std::mutex> guard(m_send_mutex);
 
+        // This loop just find out a matched work_ev which comes from
+        // upstream, and a corresponding worklist
         while (true) {
           if (m_exit)
             break;
 
-          if (source ==
-              0) // we alternate source for giving each worklist a fair chance
-          {
-            if (m_pass_remote_work) // we first check the pass list at this
-                                    // round
-            {
+          // we alternate source for giving each worklist a fair chance
+          // This procedure will be triggered by ReceiveLoop
+          if (source == 0) {
+            // we first check the pass list at this round
+            if (m_pass_remote_work) {
               m_pass_remote_work = false;
               work_ev = std::move(m_pass_remote_work_event);
               worklist = &m_pass_remote_output_worklist;
               break;
             }
-
+            // this procedure will be triggered by SignalRemoteWork
             if (m_send_remote_work) {
               m_send_remote_work = false;
               work_ev = std::move(m_send_remote_work_event);
               worklist = &m_send_remote_output_worklist;
               break;
             }
-          }
-
-          else {
-            if (m_send_remote_work) // we first check the send list at this
-                                    // round
-            {
+          } else {
+            // we first check the send list at this round
+            // Same, SignalRemoteWork modifies m_send_remote_work
+            if (m_send_remote_work) {
               m_send_remote_work = false;
               work_ev = std::move(m_send_remote_work_event);
               worklist = &m_send_remote_output_worklist;
               break;
             }
-
+            // This branch has the same logic but with different sequence of
+            // execution
             if (m_pass_remote_work) {
               m_pass_remote_work = false;
               work_ev = std::move(m_pass_remote_work_event);
@@ -458,7 +465,7 @@ private:
               break;
             }
           }
-
+          // Notified by SignalRemoteWork or ReceiveLoop
           m_send_cv.wait(guard);
         }
       }
@@ -468,12 +475,16 @@ private:
 
       source = 1 - source;
 
+      // waiting for an even came from upstream
       work_ev.Wait(stream.cuda_stream);
       std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
 
       for (auto output_seg : output_segs) {
+        // Now send m_send_remote_output_worklist or
+        // m_pass_remote_output_worklist along with out link
         auto ev = m_link_out.Send(output_seg, Event()).get();
         ev.Wait(stream.cuda_stream);
+        // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);
       }
@@ -530,11 +541,15 @@ public:
   CircularWorklist<TLocal> &GetLocalInputWorklist() override {
     return m_local_input_worklist;
   }
+  // Can be directly accessed by outside caller. This functio is used in the
+  // example of SSSP for storing vertices which don't belong to current subgraph
   CircularWorklist<TRemote> &GetRemoteOutputWorklist() override {
     return m_send_remote_output_worklist;
   }
+  // This variable doesn't not interact with any other variables
   Worklist<TLocal> &GetTempWorklist() override { return m_temp_worklist; }
 
+  // convert m_local_input_worklist to segment for consuming purpose
   std::vector<Segment<TLocal>> GetLocalWork(Stream &stream) override {
     auto segs = m_local_input_worklist.ToSegs(stream);
 
@@ -571,7 +586,8 @@ public:
   void PerformSplitSend(Segment<TLocal> &split_work, Stream &stream) override {
     if (split_work.Empty())
       return;
-
+    // All work items in m_local_input_worklist are split
+    // the content in m_send_remote_output_worklist will be sent out by SendLoop
     SplitSend(split_work, m_local_input_worklist, m_send_remote_output_worklist,
               stream);
     Event split_ev = m_context.RecordEvent(m_dev, stream.cuda_stream);

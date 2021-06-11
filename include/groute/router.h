@@ -667,10 +667,12 @@ public:
   Router(Context &context, const std::shared_ptr<IPolicy> &policy)
       : m_context(context), m_policy(policy),
         m_possible_routes(policy->GetRoutingTable()) {
+    // Create MemcpyInvokers or MemcpyWorkers between src and dst
     context.RequireMemcpyLanes(m_possible_routes);
 
     std::set<device_t> dst_devs;
 
+    // create a sender for each src device
     for (auto &p : m_possible_routes) {
       device_t src_dev = p.first;
       m_senders[src_dev] = groute::make_unique<Sender>(*this, src_dev);
@@ -684,6 +686,7 @@ public:
       m_receivers[dst_dev] = groute::make_unique<Receiver>(*this, dst_dev);
     }
 
+    // AddPossibleSender does nothing but add sources to receiver
     for (auto &p : m_possible_routes) {
       device_t src_dev = p.first;
       for (auto dst_dev : p.second) {

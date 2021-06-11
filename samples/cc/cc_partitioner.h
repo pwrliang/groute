@@ -162,8 +162,6 @@ namespace cc
         EdgePartitioner(int ngpus, int nvtxs, const groute::Segment<Edge>& all_edges, bool vertex_partitioning = false) :
             m_ngpus(ngpus), m_nvtxs(nvtxs), m_vertex_partitioning(vertex_partitioning)
         {
-            assert(groute::Device::IsHost(src_dev));
-
             if (m_vertex_partitioning)
             {
                 m_metadata_ptrs.reserve(m_ngpus);

@@ -392,15 +392,12 @@ public:
 };
 
 template <typename F, typename... Args>
-void LaunchKernel(const Stream& stream, F f, Args&&... args) {
-  int grid_size, block_size;
+void LaunchKernel(const Stream &stream, size_t work_size, F f, Args &&...args) {
+  dim3 bd(256, 1, 1);
+  dim3 gd(round_up(work_size, bd.x), 1, 1);
 
-  GROUTE_CUDA_CHECK(cudaOccupancyMaxPotentialBlockSize(&grid_size, &block_size,
-                                                KernelWrapper<F, Args...>, 0,
-                                                (int) 256));
-
-  KernelWrapper<<<grid_size, block_size, 0, stream.cuda_stream>>>(
-      f, std::forward<Args>(args)...);
+  KernelWrapper<<<gd, bd, 0, stream.cuda_stream>>>(f,
+                                                   std::forward<Args>(args)...);
 }
 } // namespace groute
 

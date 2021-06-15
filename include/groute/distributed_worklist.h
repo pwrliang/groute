@@ -49,6 +49,8 @@
 
 #include <gflags/gflags.h>
 
+#include <utils/stopwatch.h>
+
 DECLARE_double(wl_alloc_factor_local);
 DECLARE_double(wl_alloc_factor_in);
 DECLARE_double(wl_alloc_factor_out);
@@ -200,11 +202,11 @@ void SplitSegment(groute::Stream &stream, Segment<T> segment,
                   thrust::device_vector<dev::Worklist<T>> &wl) {
 
   dev::Worklist<T> *d_dev_wl = thrust::raw_pointer_cast(wl.data());
-  auto seg_size = segment.GetSegmentSize();
-  auto *data = segment.GetSegmentPtr();
-  auto num_split = wl.size();
+  size_t seg_size = segment.GetSegmentSize();
+  T *data = segment.GetSegmentPtr();
+  size_t num_split = wl.size();
 
-  LaunchKernel(stream, [=] __device__() {
+  LaunchKernel(stream, seg_size, [=] __device__() {
     auto tid = TID_1D;
     auto nthreads = TOTAL_THREADS_1D;
 
@@ -296,6 +298,8 @@ private:
 
   int m_numsplit;
   thrust::device_vector<dev::Worklist<TRemote>> m_dev_wl;
+
+  double stage1{}, stage2{}, stage3{};
 
   void SplitReceive(const groute::Segment<TRemote> &received_work,
                     groute::CircularWorklist<TLocal> &local_work,
@@ -512,6 +516,9 @@ private:
 
       // We may split a Segment by key into pieces
       for (auto output_seg : output_segs) {
+        Stopwatch sw;
+
+        sw.start();
         std::vector<std::unique_ptr<Worklist<TRemote>>> prepared_buffers;
         m_dev_wl.clear();
 
@@ -523,8 +530,17 @@ private:
           m_dev_wl.push_back(wl->DeviceObject());
           prepared_buffers.push_back(std::move(wl));
         }
+        sw.stop();
+        stage1 += sw.ms();
 
+        sw.start();
         SplitSegment(stream, output_seg, m_dev_wl);
+        stream.Sync();
+        sw.stop();
+        stage2 += sw.ms();
+
+        sw.start();
+        std::vector<Event> events;
 
         for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
           auto seg = prepared_buffers[seg_idx]->ToSeg(stream);
@@ -532,9 +548,17 @@ private:
           // Now send m_send_remote_output_worklist or
           // m_pass_remote_output_worklist along with out link
           auto ev = m_link_out.Send(seg, Event()).get();
-          ev.Wait(stream.cuda_stream);
-          m_segpool_split->ReleaseBuffer(seg.GetSegmentPtr());
+          events.template emplace_back(std::move(ev));
         }
+
+        for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
+          auto &ev = events[seg_idx];
+          auto &wl = prepared_buffers[seg_idx];
+          ev.Wait(stream.cuda_stream);
+          m_segpool_split->ReleaseBuffer(wl->GetDataPtr());
+        }
+        sw.stop();
+        stage3 += sw.ms();
         // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);
@@ -579,7 +603,8 @@ public:
     m_pass_remote_output_worklist.ResetAsync((cudaStream_t)0);
 
     m_segpool_split = std::make_shared<router::SegmentPool<TRemote>>(
-        m_context, dev, (int)m_send_remote_output_worklist.capacity() / 4,
+        m_context, dev,
+        (int)m_send_remote_output_worklist.capacity() / m_numsplit / 2,
         m_numsplit);
 
     GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)0)); // just in case
@@ -591,6 +616,8 @@ public:
   ~DistributedWorklistPeer() {
     m_receive_thread.join();
     m_send_thread.join();
+    std::cout << "Stage1: " << stage1 << " Stage2: " << stage2
+              << " Stage3: " << stage3 << std::endl;
   }
 
   CircularWorklist<TLocal> &GetLocalInputWorklist() override {

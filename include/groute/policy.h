@@ -200,6 +200,10 @@ public:
   static std::shared_ptr<IPolicy> CreateMultiRingsPolicy(int ndevs) {
     assert(ndevs > 0);
 
+    if (ndevs != 8) {
+      return CreateRingPolicy(ndevs);
+    }
+
     std::vector<std::vector<int>> seqs{{0, 6, 5, 4, 7, 1, 2, 3},
                                        {0, 3, 2, 1, 7, 4, 5, 6}};
     std::vector<RoutingTable> tables;

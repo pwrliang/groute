@@ -36,6 +36,9 @@
 #include <cuda_runtime.h>
 #include <vector_types.h>
 
+#define TID_1D (threadIdx.x + blockIdx.x * blockDim.x)
+#define TOTAL_THREADS_1D (gridDim.x * blockDim.x)
+
 namespace groute {
 static void HandleError(const char *file, int line, cudaError_t err) {
   printf("ERROR in %s:%d: %s (%d)\n", file, line, cudaGetErrorString(err), err);
@@ -67,6 +70,11 @@ static void HandleError(const char *file, int line, CUresult err) {
       ::groute::HandleError(__FILE__, __LINE__, errr);                         \
     }                                                                          \
   } while (0)
+
+template <typename F, typename... Args>
+__global__ void KernelWrapper(F f, Args... args) {
+  f(args...);
+}
 
 } // namespace groute
 

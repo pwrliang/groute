@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.19)
+cmake_minimum_required (VERSION 3.16)
 project (groute LANGUAGES CXX CUDA)
 
 ############## DEPENDENCIES ##############
@@ -39,14 +39,19 @@ if (METIS_FOUND)
   add_definitions(-DHAVE_METIS)
 endif()
 
+
 find_package(CUDAToolkit)
+
 set(CMAKE_CUDA_ARCHITECTURES "60;70") #60;61
+
+
 
 ############## BUILD ##############
 
-include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/deps/thrust)
 set(EXTRA_LIBS gflags_static pthread ${METIS_LIBRARIES} CUDA::nvToolsExt CUDA::cuda_driver)
 set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda")
 
 include_directories(${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${METIS_INCLUDE_DIRS})
 add_executable(cc src/utils/parser.cu src/utils/utils.cu

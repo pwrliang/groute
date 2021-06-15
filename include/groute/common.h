@@ -30,6 +30,8 @@
 #ifndef __GROUTE_COMMON_H
 #define __GROUTE_COMMON_H
 
+#include <memory>
+
 #include <climits>
 #include <future>
 #include <map>
@@ -152,12 +154,12 @@ private:
 
 public:
   Segment(T *segment_ptr, size_t total_size, size_t segment_size,
-          size_t segment_offset, void *metadata = nullptr)
+          size_t segment_offset, std::shared_ptr<void> metadata = nullptr)
       : m_segment_ptr(segment_ptr), m_total_size(total_size),
         m_segment_size(segment_size), m_segment_offset(segment_offset),
         metadata(metadata) {}
 
-  Segment(T *segment_ptr, size_t total_size, void *metadata = nullptr)
+  Segment(T *segment_ptr, size_t total_size, std::shared_ptr<void> metadata = nullptr)
       : m_segment_ptr(segment_ptr), m_total_size(total_size),
         m_segment_size(total_size), m_segment_offset(0), metadata(metadata) {}
 
@@ -165,7 +167,7 @@ public:
       : m_segment_ptr(nullptr), m_total_size(0), m_segment_size(0),
         m_segment_offset(0), metadata(nullptr) {}
 
-  void *metadata; // a metadata field for user customization
+  std::shared_ptr<void> metadata; // a metadata field for user customization
 
   /// @brief is the segment empty
   bool Empty() const { return m_segment_size == 0; }

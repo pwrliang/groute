@@ -259,7 +259,7 @@ struct __MultiRunner__ {
             : FLAGS_pipe_alloc_size;
 
     groute::router::Router<TRemote> worklist_router(
-        context, groute::router::Policy::CreateRingPolicy(ngpus));
+        context, groute::router::Policy::CreateMultiRingsPolicy(ngpus));
 
     groute::DistributedWorklist<TLocal, TRemote> distributed_worklist(
         context, worklist_router, ngpus);

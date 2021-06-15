@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thrust/device_vector.h>
 #include <vector>
 
 #include <groute/internal/cuda_utils.h>
@@ -194,6 +195,27 @@ struct IDistributedWorklist {
   virtual bool HasActivePeers() = 0;
 };
 
+template <typename T>
+void SplitSegment(groute::Stream &stream, Segment<T> segment,
+                  thrust::device_vector<dev::Worklist<T>> &wl) {
+
+  dev::Worklist<T> *d_dev_wl = thrust::raw_pointer_cast(wl.data());
+  auto seg_size = segment.GetSegmentSize();
+  auto *data = segment.GetSegmentPtr();
+  auto num_split = wl.size();
+
+  LaunchKernel(stream, [=] __device__() {
+    auto tid = TID_1D;
+    auto nthreads = TOTAL_THREADS_1D;
+
+    for (int i = 0 + tid; i < seg_size; i += nthreads) {
+      int idx = data[i] % num_split;
+
+      d_dev_wl[idx].append(data[i]);
+    }
+  });
+}
+
 template <typename TLocal, typename TRemote> struct IDistributedWorklistPeer {
   virtual ~IDistributedWorklistPeer() {}
 
@@ -269,6 +291,11 @@ private:
   volatile bool m_exit = false;
 
   Link<TRemote> m_link_in, m_link_out;
+
+  std::shared_ptr<router::SegmentPool<TRemote>> m_segpool_split;
+
+  int m_numsplit;
+  thrust::device_vector<dev::Worklist<TRemote>> m_dev_wl;
 
   void SplitReceive(const groute::Segment<TRemote> &received_work,
                     groute::CircularWorklist<TLocal> &local_work,
@@ -358,7 +385,11 @@ private:
         m_dev, (m_flags & DW_HighPriorityReceive) ? SP_High : SP_Default);
 
     while (true) {
+      // For here, actually, we are using pipeline receiver
+      // Because we pre-allocate some buffers in PipelinedReceiver,
+      // so this thread will stuck in here
       auto fut = m_link_in.Receive();
+      // This future will be fulfilled by ReceiveOperation
       auto seg = fut.get();
       if (seg.Empty())
         break;
@@ -479,11 +510,33 @@ private:
       work_ev.Wait(stream.cuda_stream);
       std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
 
+      // We may split a Segment by key into pieces
       for (auto output_seg : output_segs) {
-        // Now send m_send_remote_output_worklist or
-        // m_pass_remote_output_worklist along with out link
-        auto ev = m_link_out.Send(output_seg, Event()).get();
-        ev.Wait(stream.cuda_stream);
+        std::vector<std::unique_ptr<Worklist<TRemote>>> prepared_buffers;
+        m_dev_wl.clear();
+
+        for (int i = 0; i < m_numsplit; i++) {
+          Segment<TRemote> buffer = m_segpool_split->GetBuffer();
+          auto wl = make_unique<Worklist<TRemote>>(
+              buffer.GetSegmentPtr(), (uint32_t)buffer.GetSegmentSize());
+          wl->ResetAsync(stream.cuda_stream);
+          m_dev_wl.push_back(wl->DeviceObject());
+          prepared_buffers.push_back(std::move(wl));
+        }
+
+        SplitSegment(stream, output_seg, m_dev_wl);
+
+        std::cout << "m_dev_wl: " << m_dev_wl.size() << std::endl;
+
+        for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
+          auto seg = prepared_buffers[seg_idx]->ToSeg(stream);
+          seg.metadata = std::make_shared<int>(seg_idx);
+          // Now send m_send_remote_output_worklist or
+          // m_pass_remote_output_worklist along with out link
+          auto ev = m_link_out.Send(seg, Event()).get();
+          ev.Wait(stream.cuda_stream);
+          m_segpool_split->ReleaseBuffer(seg.GetSegmentPtr());
+        }
         // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);
@@ -501,7 +554,7 @@ public:
       : m_context(context), m_dev(dev), m_ngpus(ngpus),
         m_distributed_worklist(distributed_worklist), m_split_ops(split_ops),
         m_flags(flags), m_link_in(router, dev, max_exch_size, exch_buffs),
-        m_link_out(dev, router) {
+        m_link_out(dev, router), m_numsplit(2) {
     void *mem_buffer;
     size_t mem_size;
 
@@ -526,6 +579,10 @@ public:
 
     m_send_remote_output_worklist.ResetAsync((cudaStream_t)0);
     m_pass_remote_output_worklist.ResetAsync((cudaStream_t)0);
+
+    m_segpool_split = std::make_shared<router::SegmentPool<TRemote>>(
+        m_context, dev, (int)m_send_remote_output_worklist.capacity() / 4,
+        m_numsplit);
 
     GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)0)); // just in case
 

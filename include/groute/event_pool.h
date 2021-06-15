@@ -390,6 +390,18 @@ public:
     GROUTE_CUDA_CHECK(cudaEventSynchronize(sync_event));
   }
 };
+
+template <typename F, typename... Args>
+void LaunchKernel(const Stream& stream, F f, Args&&... args) {
+  int grid_size, block_size;
+
+  GROUTE_CUDA_CHECK(cudaOccupancyMaxPotentialBlockSize(&grid_size, &block_size,
+                                                KernelWrapper<F, Args...>, 0,
+                                                (int) 256));
+
+  KernelWrapper<<<grid_size, block_size, 0, stream.cuda_stream>>>(
+      f, std::forward<Args>(args)...);
+}
 } // namespace groute
 
 #endif // __GROUTE_EVPOOL_H

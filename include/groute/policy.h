@@ -47,19 +47,53 @@ namespace router {
  */
 class Policy : public IPolicy {
 private:
-  RoutingTable m_topology;
+  std::vector<RoutingTable> m_tables;
   RouteStrategy m_strategy;
 
 public:
   Policy(const RoutingTable &topology, RouteStrategy strategy = Availability)
-      : m_topology(topology), m_strategy(strategy) {}
+      : m_tables{topology}, m_strategy(strategy) {}
 
-  RoutingTable GetRoutingTable() override { return m_topology; }
+  Policy(std::vector<RoutingTable> tables,
+         RouteStrategy strategy = Availability)
+      : m_tables(std::move(tables)), m_strategy(strategy) {}
 
-  Route GetRoute(device_t src_dev, void *message_metadata) override {
-    assert(m_topology.find(src_dev) != m_topology.end());
+  RoutingTable GetRoutingTable() override {
+    RoutingTable full_table;
 
-    return Route(m_topology.at(src_dev), m_strategy);
+    for (auto &table : m_tables) {
+      for (auto &e : table) {
+        auto src = e.first;
+        auto &dsts = e.second;
+
+        for (auto dst : dsts) {
+          auto &merged_dsts = full_table[src];
+
+          if (std::find(merged_dsts.begin(), merged_dsts.end(), dst) ==
+              merged_dsts.end()) {
+            merged_dsts.push_back(dst);
+          }
+        }
+      }
+    }
+
+    return full_table;
+  }
+
+  Route GetRoute(device_t src_dev,
+                 std::shared_ptr<void> message_metadata) override {
+    RoutingTable topology;
+    if (message_metadata == nullptr) {
+      topology = m_tables[0];
+    } else {
+      int ring_idx = *static_cast<int *>(message_metadata.get());
+      std::cout << "Ring idx: " << ring_idx << std::endl;
+      topology = m_tables[ring_idx];
+    }
+
+    assert(topology.find(src_dev) != topology.end());
+
+    return Route(topology.at(src_dev), m_strategy);
   }
 
   static std::shared_ptr<IPolicy>
@@ -155,16 +189,6 @@ public:
     for (device_t i = 0; i < ndevs; i++) {
       topology[i] = {(i + 1) % ndevs};
     }
-    if (ndevs == 8) {
-      topology[0] = {3};
-      topology[1] = {7};
-      topology[2] = {1};
-      topology[3] = {2};
-      topology[4] = {5};
-      topology[5] = {6};
-      topology[6] = {0};
-      topology[7] = {4};
-    }
 
     // Instead of pushing to GPU 0, we push tasks to the first available device,
     // this is beneficial for the case where the first device is already
@@ -172,6 +196,25 @@ public:
     topology[Device::Host] = range(ndevs); // for initial work from host
 
     return std::make_shared<Policy>(topology, Availability);
+  }
+
+  static std::shared_ptr<IPolicy> CreateMultiRingsPolicy(int ndevs) {
+    assert(ndevs > 0);
+
+    std::vector<std::vector<int>> seqs{{0, 6, 5, 4, 7, 1, 2, 3},
+                                       {0, 3, 2, 1, 7, 4, 5, 6}};
+    std::vector<RoutingTable> tables;
+
+    for (auto &seq : seqs) {
+      RoutingTable topology;
+
+      // Instead of pushing to GPU 0, we push tasks to the first available
+      // device, this is beneficial for the case where the first device is
+      // already utilized with a prior task.
+      topology[Device::Host] = range(ndevs); // for initial work from host
+      tables.push_back(topology);
+    }
+    return std::make_shared<Policy>(tables, Availability);
   }
 };
 } // namespace router

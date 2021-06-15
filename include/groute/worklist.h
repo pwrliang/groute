@@ -46,8 +46,6 @@
 #define WARP_SIZE 32
 #define DBS 256
 
-#define TID_1D (threadIdx.x + blockIdx.x * blockDim.x)
-#define TOTAL_THREADS_1D (gridDim.x * blockDim.x)
 
 __device__ __forceinline__ int lane_id() {
   return threadIdx.x & (WARP_SIZE - 1);
@@ -858,6 +856,10 @@ public:
     end = *m_host_end;
     alloc_end = *m_host_alloc_end;
     size = end - start;
+  }
+
+  uint32_t capacity() const {
+    return m_capacity;
   }
 
   void PrintOffsetsDebug(const Stream &stream) const {

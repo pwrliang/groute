@@ -220,7 +220,7 @@ struct IPolicy {
   virtual ~IPolicy() {}
 
   virtual RoutingTable GetRoutingTable() = 0; // TODO: we can avoid this
-  virtual Route GetRoute(device_t src_dev, void *message_metadata) = 0;
+  virtual Route GetRoute(device_t src_dev, std::shared_ptr<void> message_metadata) = 0;
 };
 
 struct IRouterBase // an untyped base interface for the Router
@@ -241,6 +241,89 @@ template <typename T> struct IRouter : IRouterBase {
                           size_t num_buffers) = 0;
 };
 
+
+template<typename T>
+struct SegmentPool {
+  device_t m_dev;
+  std::deque<T *> m_buffers;
+  std::deque<T *> m_buffers_in_use;
+  int m_chunksize;
+
+  std::mutex m_lock, m_destructo_lock;
+
+  SegmentPool(const Context &ctx, device_t dev, int chunksize, int numchunks)
+      : m_dev(dev), m_chunksize(chunksize) {
+    ctx.SetDevice(dev);
+    std::cout << chunksize * sizeof(T) / 1024 / 1024 << " MB" << std::endl;
+
+    for (int i = 0; i < numchunks; ++i) {
+      T *buff;
+
+      if (dev == Device::Host)
+        GROUTE_CUDA_CHECK(cudaMallocHost(&buff, chunksize * sizeof(T)));
+      else
+        GROUTE_CUDA_CHECK(cudaMalloc(&buff, chunksize * sizeof(T)));
+
+      m_buffers.push_back(buff);
+    }
+  }
+
+  ~SegmentPool() {
+    std::lock_guard<std::mutex> guard2(m_destructo_lock);
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    if (m_buffers_in_use.size() > 0) {
+      printf(
+          "ERROR: SOME (%llu) BUFFERS ARE STILL IN USE, NOT DEALLOCATING\n",
+          m_buffers_in_use.size());
+    }
+    for (T *buff : m_buffers) {
+      if (m_dev == Device::Host)
+        GROUTE_CUDA_CHECK(cudaFreeHost(buff));
+      else
+        GROUTE_CUDA_CHECK(cudaFree(buff));
+    }
+
+    m_buffers.clear();
+    m_buffers_in_use.clear();
+  }
+
+  Segment<T> GetBuffer() {
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    if (m_buffers.empty())
+      return Segment<T>();
+
+    T *buff = m_buffers.front();
+    m_buffers.pop_front();
+    m_buffers_in_use.push_back(buff);
+    return Segment<T>(buff, m_chunksize);
+  }
+
+  void ReleaseBuffer(T *buff) {
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    for (auto iter = m_buffers_in_use.begin(); iter != m_buffers_in_use.end();
+         ++iter) {
+      if (*iter == buff) {
+        m_buffers_in_use.erase(iter);
+        m_buffers.push_back(buff);
+        return;
+      }
+    }
+    printf("ERROR: NO SUCH BUFFER EXISTS\n");
+  }
+
+  void ReleaseBufferEvent(T *buff, int dev, const Event &ev) {
+    std::lock_guard<std::mutex> guard(m_destructo_lock);
+
+    if (dev >= 0)
+      GROUTE_CUDA_CHECK(cudaSetDevice(dev));
+    ev.Sync();
+
+    ReleaseBuffer(buff);
+  }
+};
 /**
  * @brief The focal point between multiple senders and receivers.
  *        The router routs data from a sender into one/many receivers
@@ -395,85 +478,6 @@ private:
     }
   };
 
-  struct SegmentPool {
-    device_t m_dev;
-    std::deque<T *> m_buffers;
-    std::deque<T *> m_buffers_in_use;
-    int m_chunksize;
-
-    std::mutex m_lock, m_destructo_lock;
-
-    SegmentPool(const Context &ctx, device_t dev, int chunksize, int numchunks)
-        : m_dev(dev), m_chunksize(chunksize) {
-      ctx.SetDevice(dev);
-      for (int i = 0; i < numchunks; ++i) {
-        T *buff;
-
-        if (dev == Device::Host)
-          GROUTE_CUDA_CHECK(cudaMallocHost(&buff, chunksize * sizeof(T)));
-        else
-          GROUTE_CUDA_CHECK(cudaMalloc(&buff, chunksize * sizeof(T)));
-
-        m_buffers.push_back(buff);
-      }
-    }
-
-    ~SegmentPool() {
-      std::lock_guard<std::mutex> guard2(m_destructo_lock);
-      std::lock_guard<std::mutex> guard(m_lock);
-
-      if (m_buffers_in_use.size() > 0) {
-        printf(
-            "ERROR: SOME (%llu) BUFFERS ARE STILL IN USE, NOT DEALLOCATING\n",
-            m_buffers_in_use.size());
-      }
-      for (T *buff : m_buffers) {
-        if (m_dev == Device::Host)
-          GROUTE_CUDA_CHECK(cudaFreeHost(buff));
-        else
-          GROUTE_CUDA_CHECK(cudaFree(buff));
-      }
-
-      m_buffers.clear();
-      m_buffers_in_use.clear();
-    }
-
-    Segment<T> GetBuffer() {
-      std::lock_guard<std::mutex> guard(m_lock);
-
-      if (m_buffers.empty())
-        return Segment<T>();
-
-      T *buff = m_buffers.front();
-      m_buffers.pop_front();
-      m_buffers_in_use.push_back(buff);
-      return Segment<T>(buff, m_chunksize);
-    }
-
-    void ReleaseBuffer(T *buff) {
-      std::lock_guard<std::mutex> guard(m_lock);
-
-      for (auto iter = m_buffers_in_use.begin(); iter != m_buffers_in_use.end();
-           ++iter) {
-        if (*iter == buff) {
-          m_buffers_in_use.erase(iter);
-          m_buffers.push_back(buff);
-          return;
-        }
-      }
-      printf("ERROR: NO SUCH BUFFER EXISTS\n");
-    }
-
-    void ReleaseBufferEvent(T *buff, int dev, const Event &ev) {
-      std::lock_guard<std::mutex> guard(m_destructo_lock);
-
-      if (dev >= 0)
-        GROUTE_CUDA_CHECK(cudaSetDevice(dev));
-      ev.Sync();
-
-      ReleaseBuffer(buff);
-    }
-  };
 
   class Sender : public ISender<T> {
   private:
@@ -481,7 +485,7 @@ private:
     const device_t m_dev;
     bool m_shutdown;
 
-    SegmentPool m_segpool;
+    SegmentPool<T> m_segpool;
 
   public:
     Sender(Router<T> &router, device_t dev, int chunksize = 0,
@@ -523,7 +527,7 @@ private:
       int devid = m_router.m_context.GetDevId(m_dev);
 
       std::thread asyncrelease(
-          [](SegmentPool &segpool, int dev, Segment<T> seg, Event ev) {
+          [](SegmentPool<T> &segpool, int dev, Segment<T> seg, Event ev) {
             segpool.ReleaseBufferEvent(seg.GetSegmentPtr(), dev, ev);
           },
           std::ref(m_segpool), devid, segment, ready_event);

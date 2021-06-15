@@ -66,6 +66,10 @@ struct LevelData {
   __device__ __host__ __forceinline__ LevelData(index_t node, level_t level)
       : node(node), level(level) {}
   __device__ __host__ __forceinline__ LevelData() : node(INF), level(INF) {}
+
+  __device__ __host__ __forceinline__ int operator%(int rhs) {
+    return ((node * 39) ^ level) % rhs;
+  }
 };
 
 typedef index_t local_work_t;

@@ -83,11 +83,10 @@ public:
   Route GetRoute(device_t src_dev,
                  std::shared_ptr<void> message_metadata) override {
     RoutingTable topology;
-    if (message_metadata == nullptr) {
+    if (m_tables.size() == 1 || message_metadata == nullptr) {
       topology = m_tables[0];
     } else {
       int ring_idx = *static_cast<int *>(message_metadata.get());
-      std::cout << "Ring idx: " << ring_idx << std::endl;
       topology = m_tables[ring_idx];
     }
 
@@ -207,6 +206,10 @@ public:
 
     for (auto &seq : seqs) {
       RoutingTable topology;
+
+      for (int i = 0; i < seq.size(); i++) {
+        topology[seq[i]] = {seq[(i + 1) % seq.size()]};
+      }
 
       // Instead of pushing to GPU 0, we push tasks to the first available
       // device, this is beneficial for the case where the first device is

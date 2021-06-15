@@ -526,8 +526,6 @@ private:
 
         SplitSegment(stream, output_seg, m_dev_wl);
 
-        std::cout << "m_dev_wl: " << m_dev_wl.size() << std::endl;
-
         for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
           auto seg = prepared_buffers[seg_idx]->ToSeg(stream);
           seg.metadata = std::make_shared<int>(seg_idx);

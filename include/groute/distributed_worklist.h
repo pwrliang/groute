@@ -31,25 +31,22 @@
 #define __GROUTE_DISTRIBUTED_WORKLIST_H
 
 #include <cuda_runtime.h>
+#include <gflags/gflags.h>
+#include <groute/context.h>
+#include <groute/event_pool.h>
+#include <groute/groute.h>
+#include <groute/internal/cuda_utils.h>
+#include <groute/internal/pinned_allocation.h>
+#include <groute/internal/worker.h>
+#include <groute/worklist.h>
+#include <thrust/device_vector.h>
+#include <utils/stopwatch.h>
+
 #include <initializer_list>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <thrust/device_vector.h>
 #include <vector>
-
-#include <groute/internal/cuda_utils.h>
-#include <groute/internal/pinned_allocation.h>
-#include <groute/internal/worker.h>
-
-#include <groute/context.h>
-#include <groute/event_pool.h>
-#include <groute/groute.h>
-#include <groute/worklist.h>
-
-#include <gflags/gflags.h>
-
-#include <utils/stopwatch.h>
 
 DECLARE_double(wl_alloc_factor_local);
 DECLARE_double(wl_alloc_factor_in);
@@ -81,7 +78,7 @@ struct SplitOps // an example for the required format
 
 template <typename TLocal, typename TRemote, typename SplitOps,
           bool WarpAppend = true>
-__global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
+__global__ void SplitSendKernel(SplitOps split_ops, TLocal* work_ptr,
                                 uint32_t work_size,
                                 dev::CircularWorklist<TLocal> local_work,
                                 dev::CircularWorklist<TRemote> remote_work) {
@@ -94,7 +91,7 @@ __global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
 
     if (flags & SF_Take) {
       if (WarpAppend) {
-        local_work.prepend_warp(work); // notice the prepend
+        local_work.prepend_warp(work);  // notice the prepend
       } else {
         local_work.prepend(work);
       }
@@ -105,7 +102,7 @@ __global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
       TRemote packed = split_ops.pack(work);
 
       if (WarpAppend) {
-        remote_work.append_warp(packed); // notice the append
+        remote_work.append_warp(packed);  // notice the append
       } else {
         remote_work.append(packed);
       }
@@ -115,7 +112,7 @@ __global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
 
 template <typename TLocal, typename TRemote, typename SplitOps,
           bool WarpAppend = true>
-__global__ void SplitReceiveKernel(SplitOps split_ops, TRemote *work_ptr,
+__global__ void SplitReceiveKernel(SplitOps split_ops, TRemote* work_ptr,
                                    uint32_t work_size,
                                    dev::CircularWorklist<TLocal> local_work,
                                    dev::CircularWorklist<TRemote> remote_work,
@@ -156,7 +153,7 @@ __global__ void SplitReceiveKernel(SplitOps split_ops, TRemote *work_ptr,
       }
     }
 
-    else // templated, no warp operations
+    else  // templated, no warp operations
     {
       if (flags == SF_None) {
         filter_counter.add(1);
@@ -188,7 +185,7 @@ enum DistributedWorklistFlags {
 struct IDistributedWorklist {
   virtual ~IDistributedWorklist() {}
 
-  virtual void ReportWork(int new_work, int performed_work, const char *caller,
+  virtual void ReportWork(int new_work, int performed_work, const char* caller,
                           device_t dev) = 0;
   virtual void ReportWork(int work) = 0;
   virtual bool HasWork() const = 0;
@@ -198,12 +195,11 @@ struct IDistributedWorklist {
 };
 
 template <typename T>
-void SplitSegment(groute::Stream &stream, Segment<T> segment,
-                  thrust::device_vector<dev::Worklist<T>> &wl) {
-
-  dev::Worklist<T> *d_dev_wl = thrust::raw_pointer_cast(wl.data());
+void SplitSegment(groute::Stream& stream, Segment<T>& segment,
+                  thrust::device_vector<dev::Worklist<T>>& wl) {
+  dev::Worklist<T>* d_dev_wl = thrust::raw_pointer_cast(wl.data());
   size_t seg_size = segment.GetSegmentSize();
-  T *data = segment.GetSegmentPtr();
+  T* data = segment.GetSegmentPtr();
   size_t num_split = wl.size();
 
   LaunchKernel(stream, seg_size, [=] __device__() {
@@ -218,41 +214,42 @@ void SplitSegment(groute::Stream &stream, Segment<T> segment,
   });
 }
 
-template <typename TLocal, typename TRemote> struct IDistributedWorklistPeer {
+template <typename TLocal, typename TRemote>
+struct IDistributedWorklistPeer {
   virtual ~IDistributedWorklistPeer() {}
 
   /// The LocalInputWorklist, exposed for customized usage
-  virtual CircularWorklist<TLocal> &GetLocalInputWorklist() = 0;
+  virtual CircularWorklist<TLocal>& GetLocalInputWorklist() = 0;
 
   /// The RemoteOutputWorklist, exposed for customized usage
-  virtual CircularWorklist<TRemote> &GetRemoteOutputWorklist() = 0;
+  virtual CircularWorklist<TRemote>& GetRemoteOutputWorklist() = 0;
 
   /// A temp worklist for user-code, just allocated correctly, not used
   /// internally
-  virtual Worklist<TLocal> &GetTempWorklist() = 0;
+  virtual Worklist<TLocal>& GetTempWorklist() = 0;
 
   /// A blocking call for local work segments
-  virtual std::vector<Segment<TLocal>> GetLocalWork(Stream &stream) = 0;
+  virtual std::vector<Segment<TLocal>> GetLocalWork(Stream& stream) = 0;
 
   /// Perform split-send, local work will be prepended into the
   /// LocalInputWorklist and remote work will be appended into the
   /// RemoteOutputWorklist (+signal to send thread)
-  virtual void PerformSplitSend(Segment<TLocal> &split_work,
-                                Stream &stream) = 0;
+  virtual void PerformSplitSend(Segment<TLocal>& split_work,
+                                Stream& stream) = 0;
 
   /// Signal that work was pushed into the RemoteOutputWorklist
-  virtual void SignalRemoteWork(const Event &ev) = 0;
+  virtual void SignalRemoteWork(const Event& ev) = 0;
 };
 
 template <typename TLocal, typename TRemote, typename SplitOps>
 class DistributedWorklistPeer
     : public IDistributedWorklistPeer<TLocal, TRemote> {
-protected:
+ protected:
   int m_dev, m_ngpus;
 
-private:
-  Context &m_context;
-  IDistributedWorklist &m_distributed_worklist;
+ private:
+  Context& m_context;
+  IDistributedWorklist& m_distributed_worklist;
 
   SplitOps m_split_ops;
   DistributedWorklistFlags m_flags;
@@ -262,9 +259,9 @@ private:
   Worklist<TLocal> m_temp_worklist;
 
   CircularWorklist<TRemote>
-      m_send_remote_output_worklist, // From local work (split-send)
-      m_pass_remote_output_worklist; // From previous device on the ring
-                                     // (split-receive), passing on
+      m_send_remote_output_worklist,  // From local work (split-send)
+      m_pass_remote_output_worklist;  // From previous device on the ring
+                                      // (split-receive), passing on
 
   std::thread m_receive_thread;
   std::thread m_send_thread;
@@ -294,17 +291,16 @@ private:
 
   Link<TRemote> m_link_in, m_link_out;
 
-  std::shared_ptr<router::SegmentPool<TRemote>> m_segpool_split;
-
   int m_numsplit;
-  thrust::device_vector<dev::Worklist<TRemote>> m_dev_wl;
+  std::vector<std::shared_ptr<Worklist<TRemote>>> m_split_wls;
+  thrust::device_vector<dev::Worklist<TRemote>> m_dev_split_wls;
 
   double stage1{}, stage2{}, stage3{};
 
-  void SplitReceive(const groute::Segment<TRemote> &received_work,
-                    groute::CircularWorklist<TLocal> &local_work,
-                    groute::CircularWorklist<TRemote> &remote_work,
-                    groute::Stream &stream) {
+  void SplitReceive(const groute::Segment<TRemote>& received_work,
+                    groute::CircularWorklist<TLocal>& local_work,
+                    groute::CircularWorklist<TRemote>& remote_work,
+                    groute::Stream& stream) {
     m_filter_counter.ResetAsync(stream.cuda_stream);
 
     dim3 block_dims(DBS, 1, 1);
@@ -329,7 +325,7 @@ private:
     remote_work.SyncAppendAllocAsync(stream.cuda_stream);
 
 #ifndef NDEBUG
-    if (m_flags & DW_DebugPrint) // debug prints
+    if (m_flags & DW_DebugPrint)  // debug prints
     {
       printf("\n\n\tDevice: %d\nSplitReceive->Local work: ", m_dev);
       local_work.PrintOffsetsDebug(stream);
@@ -341,15 +337,15 @@ private:
     // Report work
     // TODO (later): Try to avoid copies to host
     m_distributed_worklist.ReportWork(
-        (int)received_work.GetSegmentSize() -
-            (int)m_filter_counter.GetCount(stream),
-        (int)received_work.GetSegmentSize(), "Filter", m_dev);
+        (int) received_work.GetSegmentSize() -
+            (int) m_filter_counter.GetCount(stream),
+        (int) received_work.GetSegmentSize(), "Filter", m_dev);
   }
 
-  void SplitSend(const groute::Segment<TLocal> &sent_work,
-                 groute::CircularWorklist<TLocal> &local_work,
-                 groute::CircularWorklist<TRemote> &remote_work,
-                 groute::Stream &stream) {
+  void SplitSend(const groute::Segment<TLocal>& sent_work,
+                 groute::CircularWorklist<TLocal>& local_work,
+                 groute::CircularWorklist<TRemote>& remote_work,
+                 groute::Stream& stream) {
     dim3 block_dims(DBS, 1, 1);
     dim3 grid_dims(round_up(sent_work.GetSegmentSize(), block_dims.x), 1, 1);
 
@@ -370,7 +366,7 @@ private:
     remote_work.SyncAppendAllocAsync(stream.cuda_stream);
 
 #ifndef NDEBUG
-    if (m_flags & DW_DebugPrint) // debug prints
+    if (m_flags & DW_DebugPrint)  // debug prints
     {
       printf("\n\n\tDevice: %d\nSplitSend->Local work: ", m_dev);
       local_work.PrintOffsetsDebug(stream);
@@ -453,7 +449,7 @@ private:
     int source = 0;
 
     while (true) {
-      CircularWorklist<TRemote> *worklist;
+      CircularWorklist<TRemote>* worklist;
       Event work_ev;
 
       {
@@ -519,22 +515,16 @@ private:
         Stopwatch sw;
 
         sw.start();
-        std::vector<std::unique_ptr<Worklist<TRemote>>> prepared_buffers;
-        m_dev_wl.clear();
 
         for (int i = 0; i < m_numsplit; i++) {
-          Segment<TRemote> buffer = m_segpool_split->GetBuffer();
-          auto wl = make_unique<Worklist<TRemote>>(
-              buffer.GetSegmentPtr(), (uint32_t)buffer.GetSegmentSize());
+          auto& wl = m_split_wls[i];
           wl->ResetAsync(stream.cuda_stream);
-          m_dev_wl.push_back(wl->DeviceObject());
-          prepared_buffers.push_back(std::move(wl));
         }
         sw.stop();
         stage1 += sw.ms();
 
         sw.start();
-        SplitSegment(stream, output_seg, m_dev_wl);
+        SplitSegment(stream, output_seg, m_dev_split_wls);
         stream.Sync();
         sw.stop();
         stage2 += sw.ms();
@@ -542,20 +532,19 @@ private:
         sw.start();
         std::vector<Event> events;
 
-        for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
-          auto seg = prepared_buffers[seg_idx]->ToSeg(stream);
-          seg.metadata = std::make_shared<int>(seg_idx);
+        for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
+          auto seg = m_split_wls[seg_idx]->ToSeg(stream);
+          seg.metadata = seg_idx;
           // Now send m_send_remote_output_worklist or
           // m_pass_remote_output_worklist along with out link
           auto ev = m_link_out.Send(seg, Event()).get();
-          events.template emplace_back(std::move(ev));
+//          ev.Wait(stream.cuda_stream);
+                    events.template emplace_back(std::move(ev));
         }
 
-        for (int seg_idx = 0; seg_idx < prepared_buffers.size(); seg_idx++) {
-          auto &ev = events[seg_idx];
-          auto &wl = prepared_buffers[seg_idx];
-          ev.Wait(stream.cuda_stream);
-          m_segpool_split->ReleaseBuffer(wl->GetDataPtr());
+        for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
+                    auto& ev = events[seg_idx];
+                    ev.Wait(stream.cuda_stream);
         }
         sw.stop();
         stage3 += sw.ms();
@@ -566,48 +555,56 @@ private:
     }
   }
 
-public:
-  DistributedWorklistPeer(Context &context, router::IRouter<TRemote> &router,
-                          IDistributedWorklist &distributed_worklist,
-                          const SplitOps &split_ops,
+ public:
+  DistributedWorklistPeer(Context& context, router::IRouter<TRemote>& router,
+                          IDistributedWorklist& distributed_worklist,
+                          const SplitOps& split_ops,
                           DistributedWorklistFlags flags, device_t dev,
                           int ngpus, size_t max_work_size, size_t max_exch_size,
                           size_t exch_buffs)
-      : m_context(context), m_dev(dev), m_ngpus(ngpus),
-        m_distributed_worklist(distributed_worklist), m_split_ops(split_ops),
-        m_flags(flags), m_link_in(router, dev, max_exch_size, exch_buffs),
-        m_link_out(dev, router), m_numsplit(2) {
-    void *mem_buffer;
+      : m_context(context),
+        m_dev(dev),
+        m_ngpus(ngpus),
+        m_distributed_worklist(distributed_worklist),
+        m_split_ops(split_ops),
+        m_flags(flags),
+        m_link_in(router, dev, max_exch_size, exch_buffs),
+        m_link_out(dev, router),
+        m_numsplit(2) {
+    void* mem_buffer;
     size_t mem_size;
 
     mem_buffer = context.Alloc(FLAGS_wl_alloc_factor_in, mem_size, AF_PO2);
     m_local_input_worklist = groute::CircularWorklist<TLocal>(
-        (TLocal *)mem_buffer, mem_size / sizeof(TLocal));
+        (TLocal*) mem_buffer, mem_size / sizeof(TLocal));
 
     mem_buffer = context.Alloc(FLAGS_wl_alloc_factor_local, mem_size);
-    m_temp_worklist = groute::Worklist<TLocal>((TLocal *)mem_buffer,
+    m_temp_worklist = groute::Worklist<TLocal>((TLocal*) mem_buffer,
                                                mem_size / sizeof(TLocal));
 
     mem_buffer = context.Alloc(FLAGS_wl_alloc_factor_out, mem_size, AF_PO2);
     m_send_remote_output_worklist = groute::CircularWorklist<TRemote>(
-        (TRemote *)mem_buffer, mem_size / sizeof(TRemote));
+        (TRemote*) mem_buffer, mem_size / sizeof(TRemote));
 
     mem_buffer = context.Alloc(FLAGS_wl_alloc_factor_pass, mem_size, AF_PO2);
     m_pass_remote_output_worklist = groute::CircularWorklist<TRemote>(
-        (TRemote *)mem_buffer, mem_size / sizeof(TRemote));
+        (TRemote*) mem_buffer, mem_size / sizeof(TRemote));
 
-    m_local_input_worklist.ResetAsync((cudaStream_t)0);
-    m_temp_worklist.ResetAsync((cudaStream_t)0);
+    m_local_input_worklist.ResetAsync((cudaStream_t) 0);
+    m_temp_worklist.ResetAsync((cudaStream_t) 0);
 
-    m_send_remote_output_worklist.ResetAsync((cudaStream_t)0);
-    m_pass_remote_output_worklist.ResetAsync((cudaStream_t)0);
+    m_send_remote_output_worklist.ResetAsync((cudaStream_t) 0);
+    m_pass_remote_output_worklist.ResetAsync((cudaStream_t) 0);
 
-    m_segpool_split = std::make_shared<router::SegmentPool<TRemote>>(
-        m_context, dev,
-        (int)m_send_remote_output_worklist.capacity() / m_numsplit / 2,
-        m_numsplit);
+    for (int i = 0; i < m_numsplit; i++) {
+      auto wl = std::make_shared<Worklist<TRemote>>(
+          m_send_remote_output_worklist.capacity() / m_numsplit / 2, 1);
+      wl->ResetAsync((cudaStream_t) 0);
+      m_split_wls.push_back(wl);
+      m_dev_split_wls.push_back(wl->DeviceObject());
+    }
 
-    GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)0)); // just in case
+    GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t) 0));  // just in case
 
     m_receive_thread = std::thread([this]() { ReceiveLoop(); });
     m_send_thread = std::thread([this]() { SendLoop(); });
@@ -620,19 +617,19 @@ public:
               << " Stage3: " << stage3 << std::endl;
   }
 
-  CircularWorklist<TLocal> &GetLocalInputWorklist() override {
+  CircularWorklist<TLocal>& GetLocalInputWorklist() override {
     return m_local_input_worklist;
   }
   // Can be directly accessed by outside caller. This functio is used in the
   // example of SSSP for storing vertices which don't belong to current subgraph
-  CircularWorklist<TRemote> &GetRemoteOutputWorklist() override {
+  CircularWorklist<TRemote>& GetRemoteOutputWorklist() override {
     return m_send_remote_output_worklist;
   }
   // This variable doesn't not interact with any other variables
-  Worklist<TLocal> &GetTempWorklist() override { return m_temp_worklist; }
+  Worklist<TLocal>& GetTempWorklist() override { return m_temp_worklist; }
 
   // convert m_local_input_worklist to segment for consuming purpose
-  std::vector<Segment<TLocal>> GetLocalWork(Stream &stream) override {
+  std::vector<Segment<TLocal>> GetLocalWork(Stream& stream) override {
     auto segs = m_local_input_worklist.ToSegs(stream);
 
     while (segs.empty()) {
@@ -665,7 +662,7 @@ public:
     return segs;
   }
 
-  void PerformSplitSend(Segment<TLocal> &split_work, Stream &stream) override {
+  void PerformSplitSend(Segment<TLocal>& split_work, Stream& stream) override {
     if (split_work.Empty())
       return;
     // All work items in m_local_input_worklist are split
@@ -676,7 +673,7 @@ public:
     SignalRemoteWork(split_ev);
   }
 
-  void SignalRemoteWork(const Event &ev) override {
+  void SignalRemoteWork(const Event& ev) override {
     // Signal
     std::lock_guard<std::mutex> guard(m_send_mutex);
     m_send_remote_work = true;
@@ -687,9 +684,9 @@ public:
 
 template <typename TLocal, typename TRemote>
 class DistributedWorklist : public IDistributedWorklist {
-private:
-  Context &m_context;
-  router::IRouter<TRemote> &m_router;
+ private:
+  Context& m_context;
+  router::IRouter<TRemote>& m_router;
   int m_ngpus;
 
   std::atomic<int> m_active_peers_counter;
@@ -699,17 +696,21 @@ private:
   std::atomic<unsigned int> m_reported_work;
   std::vector<unsigned int> m_ctr;
 
-public:
+ public:
   unsigned int GetCurrentWorkCount(device_t dev) { return m_ctr[dev + 1]; }
 
-public:
+ public:
   std::mutex log_gate;
 
-public:
-  DistributedWorklist(Context &context, router::IRouter<TRemote> &router,
+ public:
+  DistributedWorklist(Context& context, router::IRouter<TRemote>& router,
                       int ngpus)
-      : m_context(context), m_router(router), m_ngpus(ngpus), m_work_counter(0),
-        m_active_peers_counter(ngpus), m_reported_work(0) {
+      : m_context(context),
+        m_router(router),
+        m_ngpus(ngpus),
+        m_work_counter(0),
+        m_active_peers_counter(ngpus),
+        m_reported_work(0) {
     if (false) {
       m_ctr.resize(ngpus + 1, 0);
     }
@@ -727,10 +728,10 @@ public:
 
   template <typename SplitOps>
   std::unique_ptr<IDistributedWorklistPeer<TLocal, TRemote>> CreatePeer(
-      device_t dev, const SplitOps &split_ops, size_t max_work_size,
+      device_t dev, const SplitOps& split_ops, size_t max_work_size,
       size_t max_exch_size, size_t exch_buffs,
       DistributedWorklistFlags flags =
-          (DistributedWorklistFlags)(DW_WarpAppend | DW_HighPriorityReceive)) {
+          (DistributedWorklistFlags) (DW_WarpAppend | DW_HighPriorityReceive)) {
     m_context.SetDevice(dev);
     return groute::make_unique<
         DistributedWorklistPeer<TLocal, TRemote, SplitOps>>(
@@ -744,7 +745,7 @@ public:
     }
   }
 
-  void ReportWork(int new_work, int performed_work, const char *caller,
+  void ReportWork(int new_work, int performed_work, const char* caller,
                   device_t dev) override {
     int work = new_work - performed_work;
 
@@ -799,6 +800,6 @@ public:
 
   bool HasActivePeers() override { return m_active_peers_counter > 0; }
 };
-} // namespace groute
+}  // namespace groute
 
-#endif // __GROUTE_DISTRIBUTED_WORKLIST_H
+#endif  // __GROUTE_DISTRIBUTED_WORKLIST_H

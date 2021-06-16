@@ -30,14 +30,14 @@
 #ifndef __GROUTE_POLICY_H
 #define __GROUTE_POLICY_H
 
+#include <groute/router.h>
+
 #include <functional>
 #include <future>
 #include <map>
 #include <memory>
 #include <set>
 #include <vector>
-
-#include <groute/router.h>
 
 namespace groute {
 namespace router {
@@ -46,12 +46,12 @@ namespace router {
  * @brief A general purpose Policy object based on a topology
  */
 class Policy : public IPolicy {
-private:
+ private:
   std::vector<RoutingTable> m_tables;
   RouteStrategy m_strategy;
 
-public:
-  Policy(const RoutingTable &topology, RouteStrategy strategy = Availability)
+ public:
+  Policy(const RoutingTable& topology, RouteStrategy strategy = Availability)
       : m_tables{topology}, m_strategy(strategy) {}
 
   Policy(std::vector<RoutingTable> tables,
@@ -61,13 +61,13 @@ public:
   RoutingTable GetRoutingTable() override {
     RoutingTable full_table;
 
-    for (auto &table : m_tables) {
-      for (auto &e : table) {
+    for (auto& table : m_tables) {
+      for (auto& e : table) {
         auto src = e.first;
-        auto &dsts = e.second;
+        auto& dsts = e.second;
 
         for (auto dst : dsts) {
-          auto &merged_dsts = full_table[src];
+          auto& merged_dsts = full_table[src];
 
           if (std::find(merged_dsts.begin(), merged_dsts.end(), dst) ==
               merged_dsts.end()) {
@@ -80,14 +80,12 @@ public:
     return full_table;
   }
 
-  Route GetRoute(device_t src_dev,
-                 std::shared_ptr<void> message_metadata) override {
+  Route GetRoute(device_t src_dev, int message_metadata) override {
     RoutingTable topology;
-    if (m_tables.size() == 1 || message_metadata == nullptr) {
+    if (m_tables.size() == 1 || message_metadata == -1) {
       topology = m_tables[0];
     } else {
-      int ring_idx = *static_cast<int *>(message_metadata.get());
-      topology = m_tables[ring_idx];
+      topology = m_tables[message_metadata];
     }
 
     assert(topology.find(src_dev) != topology.end());
@@ -95,16 +93,15 @@ public:
     return Route(topology.at(src_dev), m_strategy);
   }
 
-  static std::shared_ptr<IPolicy>
-  CreateBroadcastPolicy(device_t src_dev,
-                        const std::vector<device_t> &dst_devs) {
+  static std::shared_ptr<IPolicy> CreateBroadcastPolicy(
+      device_t src_dev, const std::vector<device_t>& dst_devs) {
     RoutingTable topology;
     topology[src_dev] = dst_devs;
     return std::make_shared<Policy>(topology, Broadcast);
   }
 
-  static std::shared_ptr<IPolicy>
-  CreateScatterPolicy(device_t src_dev, const std::vector<device_t> &dst_devs) {
+  static std::shared_ptr<IPolicy> CreateScatterPolicy(
+      device_t src_dev, const std::vector<device_t>& dst_devs) {
     RoutingTable topology;
     topology[src_dev] = dst_devs;
     return std::make_shared<Policy>(topology, Availability);
@@ -117,10 +114,10 @@ public:
     return std::make_shared<Policy>(topology, Availability);
   }
 
-  static std::shared_ptr<IPolicy>
-  CreateGatherPolicy(device_t dst_dev, const std::vector<device_t> &src_devs) {
+  static std::shared_ptr<IPolicy> CreateGatherPolicy(
+      device_t dst_dev, const std::vector<device_t>& src_devs) {
     RoutingTable topology;
-    for (const device_t &src_dev : src_devs)
+    for (const device_t& src_dev : src_devs)
       topology[src_dev] = {dst_dev};
     return std::make_shared<Policy>(topology, Availability);
   }
@@ -155,7 +152,7 @@ public:
     // 7 -> 6
     // ..
 
-    unsigned int p = next_power_2((unsigned int)ndevs) / 2;
+    unsigned int p = next_power_2((unsigned int) ndevs) / 2;
     unsigned int stride = 1;
 
     while (p > 0) {
@@ -167,7 +164,7 @@ public:
         if (from <= to)
           continue;
 
-        topology[(device_t)from].push_back((device_t)to);
+        topology[(device_t) from].push_back((device_t) to);
       }
 
       p /= 2;
@@ -192,7 +189,7 @@ public:
     // Instead of pushing to GPU 0, we push tasks to the first available device,
     // this is beneficial for the case where the first device is already
     // utilized with a prior task.
-    topology[Device::Host] = range(ndevs); // for initial work from host
+    topology[Device::Host] = range(ndevs);  // for initial work from host
 
     return std::make_shared<Policy>(topology, Availability);
   }
@@ -208,7 +205,7 @@ public:
                                        {0, 3, 2, 1, 7, 4, 5, 6}};
     std::vector<RoutingTable> tables;
 
-    for (auto &seq : seqs) {
+    for (auto& seq : seqs) {
       RoutingTable topology;
 
       for (int i = 0; i < seq.size(); i++) {
@@ -218,13 +215,13 @@ public:
       // Instead of pushing to GPU 0, we push tasks to the first available
       // device, this is beneficial for the case where the first device is
       // already utilized with a prior task.
-      topology[Device::Host] = range(ndevs); // for initial work from host
+      topology[Device::Host] = range(ndevs);  // for initial work from host
       tables.push_back(topology);
     }
     return std::make_shared<Policy>(tables, Availability);
   }
 };
-} // namespace router
-} // namespace groute
+}  // namespace router
+}  // namespace groute
 
-#endif // __GROUTE_POLICY_H
+#endif  // __GROUTE_POLICY_H

@@ -31,29 +31,26 @@
 #define __GROUTE_WORKLIST_H
 
 #include <cuda_runtime.h>
+#include <groute/event_pool.h>
+
+#include <cub/util_ptx.cuh>
 #include <initializer_list>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>  // need this for the in-memory ctor call in the move assignment operator below
 #include <vector>
-
-#include <new> // need this for the in-memory ctor call in the move assignment operator below
-
-#include <cub/util_ptx.cuh>
-
-#include <groute/event_pool.h>
 
 #define WARP_SIZE 32
 #define DBS 256
-
 
 __device__ __forceinline__ int lane_id() {
   return threadIdx.x & (WARP_SIZE - 1);
 }
 
 // TODO: Wrap ballot functionality
-__device__ __forceinline__ void warp_active_count(int &first, int &offset,
-                                                  int &total) {
+__device__ __forceinline__ void warp_active_count(int& first, int& offset,
+                                                  int& total) {
   unsigned int active = __ballot_sync(__activemask(), 1);
   total = __popc(active);
   offset = __popc(active & cub::LaneMaskLt());
@@ -67,28 +64,29 @@ namespace dev {
 // worklist classes (device):
 //
 
-template <typename T> class Worklist {
-public:
-  T *m_data;
-  uint32_t *m_count;
+template <typename T>
+class Worklist {
+ public:
+  T* m_data;
+  uint32_t* m_count;
   uint32_t m_capacity;
 
-  __host__ __device__ Worklist(T *data, uint32_t *count, uint32_t capacity)
+  __host__ __device__ Worklist(T* data, uint32_t* count, uint32_t capacity)
       : m_data(data), m_count(count), m_capacity(capacity) {}
 
-  __device__ __forceinline__ void append(const T &item) const {
-    uint32_t allocation = atomicAdd(m_count, 1); // just a naive atomic add
+  __device__ __forceinline__ void append(const T& item) const {
+    uint32_t allocation = atomicAdd(m_count, 1);  // just a naive atomic add
     m_data[allocation] = item;
   }
 
-  __device__ void append_warp(const T &item) const {
+  __device__ void append_warp(const T& item) const {
     int first, total, offset;
     uint32_t allocation = 0;
 
     warp_active_count(first, offset, total);
 
     if (offset == 0) {
-      allocation = atomicAdd((uint32_t *)m_count, total);
+      allocation = atomicAdd((uint32_t*) m_count, total);
       assert(allocation + total <= m_capacity);
     }
 
@@ -96,13 +94,13 @@ public:
     m_data[allocation + offset] = item;
   }
 
-  __device__ void append_warp(const T &item, int leader, int warp_count,
+  __device__ void append_warp(const T& item, int leader, int warp_count,
                               int offset) const {
     uint32_t allocation = 0;
 
-    if (lane_id() == leader) // the leader thread
+    if (lane_id() == leader)  // the leader thread
     {
-      allocation = atomicAdd((uint32_t *)m_count, warp_count);
+      allocation = atomicAdd((uint32_t*) m_count, warp_count);
       assert(allocation + warp_count <= m_capacity);
     }
 
@@ -118,10 +116,10 @@ public:
 };
 
 class Counter {
-public:
-  uint32_t *m_counter;
+ public:
+  uint32_t* m_counter;
 
-  __host__ __device__ Counter(uint32_t *counter) : m_counter(counter) {}
+  __host__ __device__ Counter(uint32_t* counter) : m_counter(counter) {}
 
   __device__ __forceinline__ void add(uint32_t count) {
     atomicAdd(m_counter, count);
@@ -142,19 +140,23 @@ public:
   __device__ __forceinline__ uint32_t get_count() const { return *m_counter; }
 };
 
-template <typename T, bool POWER_OF_TWO = true> class CircularWorklist {
-  T *m_data;
+template <typename T, bool POWER_OF_TWO = true>
+class CircularWorklist {
+  T* m_data;
   volatile uint32_t *m_start, *m_end, *m_alloc_end;
   uint32_t m_capacity;
 
-public:
-  __host__ __device__ CircularWorklist(T *data, uint32_t *start, uint32_t *end,
-                                       uint32_t *alloc_end, uint32_t capacity)
-      : m_data(data), m_start(start), m_end(end), m_alloc_end(alloc_end),
+ public:
+  __host__ __device__ CircularWorklist(T* data, uint32_t* start, uint32_t* end,
+                                       uint32_t* alloc_end, uint32_t capacity)
+      : m_data(data),
+        m_start(start),
+        m_end(end),
+        m_alloc_end(alloc_end),
         m_capacity((POWER_OF_TWO ? (capacity - 1) : (capacity))) {
     assert(
         (capacity - 1 & capacity) ==
-        0); // must be a power of two for handling circular overflow correctly
+        0);  // must be a power of two for handling circular overflow correctly
   }
 
   __device__ __forceinline__ void reset() {
@@ -169,8 +171,8 @@ public:
 
   __device__ __forceinline__ void sync_append_alloc() { *m_end = *m_alloc_end; }
 
-  __device__ __forceinline__ void append(const T &item) {
-    uint32_t allocation = atomicAdd((uint32_t *)m_alloc_end, 1);
+  __device__ __forceinline__ void append(const T& item) {
+    uint32_t allocation = atomicAdd((uint32_t*) m_alloc_end, 1);
 
     if (POWER_OF_TWO)
       m_data[allocation & m_capacity] = item;
@@ -178,15 +180,15 @@ public:
       m_data[allocation % m_capacity] = item;
   }
 
-  __device__ void append_warp(const T &item) {
+  __device__ void append_warp(const T& item) {
     int first, total, offset;
     uint32_t allocation = 0;
 
     warp_active_count(first, offset, total);
 
-    if (offset == 0) // the leader thread
+    if (offset == 0)  // the leader thread
     {
-      allocation = atomicAdd((uint32_t *)m_alloc_end, total);
+      allocation = atomicAdd((uint32_t*) m_alloc_end, total);
       assert((allocation + total) - *m_start <
              (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
     }
@@ -199,13 +201,13 @@ public:
       m_data[(allocation + offset) % m_capacity] = item;
   }
 
-  __device__ void append_warp(const T &item, int leader, int warp_count,
+  __device__ void append_warp(const T& item, int leader, int warp_count,
                               int offset) {
     uint32_t allocation = 0;
 
-    if (lane_id() == leader) // the leader thread
+    if (lane_id() == leader)  // the leader thread
     {
-      allocation = atomicAdd((uint32_t *)m_alloc_end, warp_count);
+      allocation = atomicAdd((uint32_t*) m_alloc_end, warp_count);
       assert((allocation + warp_count) - *m_start <
              (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
     }
@@ -218,8 +220,8 @@ public:
       m_data[(allocation + offset) % m_capacity] = item;
   }
 
-  __device__ __forceinline__ void prepend(const T &item) {
-    uint32_t allocation = atomicSub((uint32_t *)m_start, 1) - 1;
+  __device__ __forceinline__ void prepend(const T& item) {
+    uint32_t allocation = atomicSub((uint32_t*) m_start, 1) - 1;
 
     if (POWER_OF_TWO)
       m_data[allocation & m_capacity] = item;
@@ -227,16 +229,16 @@ public:
       m_data[allocation % m_capacity] = item;
   }
 
-  __device__ void prepend_warp(const T &item) {
+  __device__ void prepend_warp(const T& item) {
     int first, total, offset;
     uint32_t allocation = 0;
 
     warp_active_count(first, offset, total);
 
-    if (offset == 0) // the leader thread
+    if (offset == 0)  // the leader thread
     {
-      allocation = atomicSub((uint32_t *)m_start, total) -
-                   total; // allocate 'total' items from the start
+      allocation = atomicSub((uint32_t*) m_start, total) -
+                   total;  // allocate 'total' items from the start
       assert(*m_end - allocation <
              (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
     }
@@ -249,14 +251,14 @@ public:
       m_data[(allocation + offset) % m_capacity] = item;
   }
 
-  __device__ void prepend_warp(const T &item, int leader, int warp_count,
+  __device__ void prepend_warp(const T& item, int leader, int warp_count,
                                int offset) {
     uint32_t allocation = 0;
 
-    if (lane_id() == leader) // the leader thread
+    if (lane_id() == leader)  // the leader thread
     {
-      allocation = atomicSub((uint32_t *)m_start, warp_count) -
-                   warp_count; // allocate 'total' items from the start
+      allocation = atomicSub((uint32_t*) m_start, warp_count) -
+                   warp_count;  // allocate 'total' items from the start
       assert(*m_end - allocation <
              (POWER_OF_TWO ? (m_capacity + 1) : m_capacity));
     }
@@ -285,13 +287,13 @@ public:
       end = end & m_capacity;
       return end >= start ? end - start
                           : ((m_capacity + 1) - start +
-                             end); // normal and circular cases
+                             end);  // normal and circular cases
     } else {
       start = start % m_capacity;
       end = end % m_capacity;
       return end >= start
                  ? end - start
-                 : (m_capacity - start + end); // normal and circular cases
+                 : (m_capacity - start + end);  // normal and circular cases
     }
   }
 
@@ -306,13 +308,14 @@ public:
       alloc_end = alloc_end & m_capacity;
       count = alloc_end >= end ? alloc_end - end
                                : ((m_capacity + 1) - end +
-                                  alloc_end); // normal and circular cases
+                                  alloc_end);  // normal and circular cases
     } else {
       end = end % m_capacity;
       alloc_end = alloc_end % m_capacity;
-      count = alloc_end >= end
-                  ? alloc_end - end
-                  : (m_capacity - end + alloc_end); // normal and circular cases
+      count =
+          alloc_end >= end
+              ? alloc_end - end
+              : (m_capacity - end + alloc_end);  // normal and circular cases
     }
 
     // sync alloc
@@ -335,13 +338,14 @@ public:
 /*
  * @brief A work source based on a device array and size
  */
-template <typename T> struct WorkSourceArray {
-private:
-  T *work_ptr;
+template <typename T>
+struct WorkSourceArray {
+ private:
+  T* work_ptr;
   uint32_t work_size;
 
-public:
-  __host__ __device__ WorkSourceArray(T *work_ptr, uint32_t work_size)
+ public:
+  __host__ __device__ WorkSourceArray(T* work_ptr, uint32_t work_size)
       : work_ptr(work_ptr), work_size(work_size) {}
 
   __device__ __forceinline__ T get_work(uint32_t i) const {
@@ -355,15 +359,18 @@ public:
 /*
  * @brief A work source based on two device arrays + sizes
  */
-template <typename T> struct WorkSourceTwoArrays {
-private:
+template <typename T>
+struct WorkSourceTwoArrays {
+ private:
   T *work_ptr1, *work_ptr2;
   uint32_t work_size1, work_size2;
 
-public:
-  WorkSourceTwoArrays(T *work_ptr1, uint32_t work_size1, T *work_ptr2,
+ public:
+  WorkSourceTwoArrays(T* work_ptr1, uint32_t work_size1, T* work_ptr2,
                       uint32_t work_size2)
-      : work_ptr1(work_ptr1), work_size1(work_size1), work_ptr2(work_ptr2),
+      : work_ptr1(work_ptr1),
+        work_size1(work_size1),
+        work_ptr2(work_ptr2),
         work_size2(work_size2) {}
 
   __device__ __forceinline__ T get_work(uint32_t i) {
@@ -377,13 +384,14 @@ public:
 /*
  * @brief A work source based on a device array and a device counter
  */
-template <typename T> struct WorkSourceCounter {
-private:
-  T *work_ptr;
-  uint32_t *work_counter;
+template <typename T>
+struct WorkSourceCounter {
+ private:
+  T* work_ptr;
+  uint32_t* work_counter;
 
-public:
-  WorkSourceCounter(T *work_ptr, uint32_t *work_counter)
+ public:
+  WorkSourceCounter(T* work_ptr, uint32_t* work_counter)
       : work_ptr(work_ptr), work_counter(work_counter) {}
 
   __device__ __forceinline__ T get_work(uint32_t i) { return work_ptr[i]; }
@@ -393,34 +401,36 @@ public:
 /*
  * @brief A work source based on a discrete T range [range, range+size)
  */
-template <typename T> struct WorkSourceRange {
-private:
+template <typename T>
+struct WorkSourceRange {
+ private:
   T m_range_start;
   uint32_t m_range_size;
 
-public:
+ public:
   __host__ __device__ WorkSourceRange(T range_start, uint32_t range_size)
       : m_range_start(range_start), m_range_size(range_size) {}
 
   __device__ __forceinline__ T get_work(uint32_t i) const {
-    return (T)(m_range_start + i);
+    return (T) (m_range_start + i);
   }
   __host__ __device__ __forceinline__ uint32_t get_size() const {
     return m_range_size;
   }
 };
-} // namespace dev
+}  // namespace dev
 
 //
 // worklist control kernels:
 //
 
-template <typename T> __global__ void WorklistReset(dev::Worklist<T> worklist) {
+template <typename T>
+__global__ void WorklistReset(dev::Worklist<T> worklist) {
   if (threadIdx.x == 0 && blockIdx.x == 0)
     worklist.reset();
 }
 
-static __global__ void ResetCounters(uint32_t *counters,
+static __global__ void ResetCounters(uint32_t* counters,
                                      uint32_t num_counters) {
   if (TID_1D < num_counters)
     counters[TID_1D] = 0;
@@ -460,8 +470,8 @@ __global__ void CircularWorklistAppendItem(dev::CircularWorklist<T> worklist,
 }
 
 template <typename T>
-__global__ void
-CircularWorklistSyncAppendAlloc(dev::CircularWorklist<T> worklist) {
+__global__ void CircularWorklistSyncAppendAlloc(
+    dev::CircularWorklist<T> worklist) {
   if (threadIdx.x == 0 && blockIdx.x == 0)
     worklist.sync_append_alloc();
 }
@@ -470,44 +480,52 @@ CircularWorklistSyncAppendAlloc(dev::CircularWorklist<T> worklist) {
 // worklist control classes (host):
 //
 
-template <typename T> class Worklist {
-  enum { WS = 32 };
-
+template <typename T>
+class Worklist {
   //
   // device buffer / counters
   //
-  T *m_data;
+  T* m_data;
   bool m_mem_owner;
 
-  uint32_t *m_counters;
+  uint32_t* m_counters;
   uint32_t m_capacity;
-  uint32_t *m_host_count;
+  uint32_t* m_host_count;
 
   int32_t m_current_slot;
+  int32_t m_counter_count;
 
-public:
-  Worklist(uint32_t capacity = 0)
-      : m_data(nullptr), m_mem_owner(true), m_counters(nullptr),
-        m_capacity(capacity), m_current_slot(-1) {
+ public:
+  Worklist(uint32_t capacity = 0, int counter_count = 32)
+      : m_data(nullptr),
+        m_mem_owner(true),
+        m_counters(nullptr),
+        m_capacity(capacity),
+        m_current_slot(-1),
+        m_counter_count(counter_count) {
     Alloc();
   }
 
-  Worklist(T *mem_buffer, uint32_t mem_size)
-      : m_data(mem_buffer), m_mem_owner(false), m_counters(nullptr),
-        m_capacity(mem_size), m_current_slot(-1) {
+  Worklist(T* mem_buffer, uint32_t mem_size)
+      : m_data(mem_buffer),
+        m_mem_owner(false),
+        m_counters(nullptr),
+        m_capacity(mem_size),
+        m_current_slot(-1),
+        m_counter_count(32) {
     Alloc();
   }
 
-  Worklist(const Worklist &other) = delete;
-  Worklist(Worklist &&other) = delete;
+  Worklist(const Worklist& other) = delete;
+  Worklist(Worklist&& other) = delete;
 
-private:
-  Worklist &operator=(const Worklist &other) = default;
+ private:
+  Worklist& operator=(const Worklist& other) = default;
 
-public:
-  Worklist &operator=(Worklist &&other) {
-    *this = other;            // first copy all fields
-    new (&other) Worklist(0); // clear up other
+ public:
+  Worklist& operator=(Worklist&& other) {
+    *this = other;             // first copy all fields
+    new (&other) Worklist(0);  // clear up other
 
     return (*this);
   }
@@ -516,14 +534,15 @@ public:
 
   typedef dev::Worklist<T> DeviceObjectType;
 
-private:
+ private:
   void Alloc() {
     if (m_capacity == 0)
       return;
 
     if (m_mem_owner)
       GROUTE_CUDA_CHECK(cudaMalloc(&m_data, sizeof(T) * m_capacity));
-    GROUTE_CUDA_CHECK(cudaMalloc(&m_counters, WS * sizeof(uint32_t)));
+    GROUTE_CUDA_CHECK(
+        cudaMalloc(&m_counters, m_counter_count * sizeof(uint32_t)));
     GROUTE_CUDA_CHECK(cudaMallocHost(&m_host_count, sizeof(uint32_t)));
   }
 
@@ -537,27 +556,28 @@ private:
     GROUTE_CUDA_CHECK(cudaFreeHost(m_host_count));
   }
 
-public:
+ public:
   DeviceObjectType DeviceObject() const {
-    assert(m_current_slot >= 0 && m_current_slot < WS);
+    assert(m_current_slot >= 0 && m_current_slot < m_counter_count);
     return dev::Worklist<T>(m_data, m_counters + m_current_slot, m_capacity);
   }
 
   void ResetAsync(cudaStream_t stream) {
-    m_current_slot = (m_current_slot + 1) % WS;
+    m_current_slot = (m_current_slot + 1) % m_counter_count;
     if (m_current_slot == 0) {
-      ResetCounters<<<1, WS, 0, stream>>>(m_counters, WS);
+      ResetCounters<<<1, m_counter_count, 0, stream>>>(m_counters,
+                                                       m_counter_count);
     }
   }
 
-  void AppendItemAsync(cudaStream_t stream, const T &item) const {
+  void AppendItemAsync(cudaStream_t stream, const T& item) const {
     WorklistAppendItem<<<1, 1, 0, stream>>>(DeviceObject(), item);
   }
 
-  T *GetDataPtr() const { return m_data; }
+  T* GetDataPtr() const { return m_data; }
 
-  uint32_t GetLength(const Stream &stream) const {
-    assert(m_current_slot >= 0 && m_current_slot < WS);
+  uint32_t GetLength(const Stream& stream) const {
+    assert(m_current_slot >= 0 && m_current_slot < m_counter_count);
 
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_host_count, m_counters + m_current_slot,
                                       sizeof(uint32_t), cudaMemcpyDeviceToHost,
@@ -568,12 +588,12 @@ public:
     return *m_host_count;
   }
 
-  void PrintOffsetsDebug(const Stream &stream) const {
+  void PrintOffsetsDebug(const Stream& stream) const {
     printf("\nWorklist (Debug): count: %u (capacity: %u)", GetLength(stream),
            m_capacity);
   }
 
-  Segment<T> ToSeg(const Stream &stream) const {
+  Segment<T> ToSeg(const Stream& stream) const {
     return Segment<T>(GetDataPtr(), GetLength(stream));
   }
 };
@@ -584,21 +604,21 @@ class Counter {
   //
   // device buffer / counters
   //
-  uint32_t *m_counters;
-  uint32_t *m_host_counter;
+  uint32_t* m_counters;
+  uint32_t* m_host_counter;
   int32_t m_current_slot;
 
-public:
+ public:
   Counter() : m_counters(nullptr), m_current_slot(-1) { Alloc(); }
 
-  Counter(const Counter &other) = delete;
-  Counter(Counter &&other) = delete;
+  Counter(const Counter& other) = delete;
+  Counter(Counter&& other) = delete;
 
   ~Counter() { Free(); }
 
   typedef dev::Counter DeviceObjectType;
 
-private:
+ private:
   void Alloc() {
     GROUTE_CUDA_CHECK(cudaMalloc(&m_counters, WS * sizeof(uint32_t)));
     GROUTE_CUDA_CHECK(cudaMallocHost(&m_host_counter, sizeof(uint32_t)));
@@ -609,7 +629,7 @@ private:
     GROUTE_CUDA_CHECK(cudaFreeHost(m_host_counter));
   }
 
-public:
+ public:
   DeviceObjectType DeviceObject() const {
     assert(m_current_slot >= 0 && m_current_slot < WS);
     return dev::Counter(m_counters + m_current_slot);
@@ -622,7 +642,7 @@ public:
     }
   }
 
-  uint32_t GetCount(const Stream &stream) const {
+  uint32_t GetCount(const Stream& stream) const {
     assert(m_current_slot >= 0 && m_current_slot < WS);
 
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(
@@ -639,12 +659,13 @@ inline int CircularWorklistInstanceCounter() {
   return ++instance_counter;
 }
 
-template <typename T> class CircularWorklist {
+template <typename T>
+class CircularWorklist {
   //
   // device buffer / counters
   //
 
-  T *m_data;
+  T* m_data;
   bool m_mem_owner;
 
   uint32_t *m_start, *m_end, *m_alloc_end;
@@ -657,34 +678,47 @@ template <typename T> class CircularWorklist {
   int m_instance_id;
   mutable uint32_t m_max_usage;
 
-public:
+ public:
   CircularWorklist(uint32_t capacity = 0)
-      : m_data(nullptr), m_mem_owner(true), m_start(nullptr), m_end(nullptr),
-        m_alloc_end(nullptr), m_host_start(nullptr), m_host_end(nullptr),
+      : m_data(nullptr),
+        m_mem_owner(true),
+        m_start(nullptr),
+        m_end(nullptr),
+        m_alloc_end(nullptr),
+        m_host_start(nullptr),
+        m_host_end(nullptr),
         m_host_alloc_end(nullptr),
         m_capacity(capacity == 0 ? 0 : next_power_2(capacity)),
-        m_instance_id(0), m_max_usage(0) {
+        m_instance_id(0),
+        m_max_usage(0) {
     Alloc();
   }
 
-  CircularWorklist(T *mem_buffer, uint32_t mem_size)
-      : m_data(mem_buffer), m_mem_owner(false), m_start(nullptr),
-        m_end(nullptr), m_alloc_end(nullptr), m_host_start(nullptr),
-        m_host_end(nullptr), m_host_alloc_end(nullptr), m_capacity(mem_size),
-        m_instance_id(0), m_max_usage(0) {
+  CircularWorklist(T* mem_buffer, uint32_t mem_size)
+      : m_data(mem_buffer),
+        m_mem_owner(false),
+        m_start(nullptr),
+        m_end(nullptr),
+        m_alloc_end(nullptr),
+        m_host_start(nullptr),
+        m_host_end(nullptr),
+        m_host_alloc_end(nullptr),
+        m_capacity(mem_size),
+        m_instance_id(0),
+        m_max_usage(0) {
     Alloc();
   }
 
-  CircularWorklist(const CircularWorklist &other) = delete;
-  CircularWorklist(CircularWorklist &&other) = delete;
+  CircularWorklist(const CircularWorklist& other) = delete;
+  CircularWorklist(CircularWorklist&& other) = delete;
 
-private:
-  CircularWorklist &operator=(const CircularWorklist &other) = default;
+ private:
+  CircularWorklist& operator=(const CircularWorklist& other) = default;
 
-public:
-  CircularWorklist &operator=(CircularWorklist &&other) {
-    *this = other;                    // first copy all fields
-    new (&other) CircularWorklist(0); // clear up other
+ public:
+  CircularWorklist& operator=(CircularWorklist&& other) {
+    *this = other;                     // first copy all fields
+    new (&other) CircularWorklist(0);  // clear up other
 
     return (*this);
   }
@@ -693,7 +727,7 @@ public:
 
   typedef dev::CircularWorklist<T> DeviceObjectType;
 
-private:
+ private:
   void Alloc() {
     if (m_capacity == 0)
       return;
@@ -736,8 +770,8 @@ private:
     GROUTE_CUDA_CHECK(cudaFreeHost(m_host_alloc_end));
   }
 
-  void GetBounds(uint32_t &start, uint32_t &end, uint32_t &size,
-                 const Stream &stream) const {
+  void GetBounds(uint32_t& start, uint32_t& end, uint32_t& size,
+                 const Stream& stream) const {
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_host_start, m_start, sizeof(uint32_t),
                                       cudaMemcpyDeviceToHost,
                                       stream.cuda_stream));
@@ -753,10 +787,11 @@ private:
     assert(end - start < m_capacity);
 
     if (end - start >= m_capacity) {
-      printf("\n\nCritical Warning: circular worklist has overflowed, please "
-             "allocate more memory (instance id: %d, start: %d, end: %d, "
-             "capacity: %d), exiting \n\n",
-             m_instance_id, start, end, m_capacity);
+      printf(
+          "\n\nCritical Warning: circular worklist has overflowed, please "
+          "allocate more memory (instance id: %d, start: %d, end: %d, "
+          "capacity: %d), exiting \n\n",
+          m_instance_id, start, end, m_capacity);
       exit(1);
     }
 
@@ -767,11 +802,11 @@ private:
 
     size = end >= start
                ? end - start
-               : (m_capacity - start + end); // normal and circular cases
+               : (m_capacity - start + end);  // normal and circular cases
   }
 
-  void GetAllocCount(uint32_t &former_end, uint32_t &alloc_end, uint32_t &count,
-                     const Stream &stream) const {
+  void GetAllocCount(uint32_t& former_end, uint32_t& alloc_end, uint32_t& count,
+                     const Stream& stream) const {
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_host_end, m_end, sizeof(uint32_t),
                                       cudaMemcpyDeviceToHost,
                                       stream.cuda_stream));
@@ -789,10 +824,10 @@ private:
 
     count = alloc_end >= former_end ? alloc_end - former_end
                                     : (m_capacity - former_end +
-                                       alloc_end); // normal and circular cases
+                                       alloc_end);  // normal and circular cases
   }
 
-public:
+ public:
   DeviceObjectType DeviceObject() const {
     return dev::CircularWorklist<T>(m_data, m_start, m_end, m_alloc_end,
                                     m_capacity);
@@ -806,7 +841,7 @@ public:
     CircularWorklistSyncAppendAlloc<<<1, 1, 0, stream>>>(DeviceObject());
   }
 
-  void AppendItemAsync(cudaStream_t stream, const T &item) const {
+  void AppendItemAsync(cudaStream_t stream, const T& item) const {
     CircularWorklistAppendItem<<<1, 1, 0, stream>>>(DeviceObject(), item);
   }
 
@@ -817,29 +852,29 @@ public:
     CircularWorklistPopItems<<<1, 1, 0, stream>>>(DeviceObject(), items);
   }
 
-  int GetLength(const Stream &stream) const {
+  int GetLength(const Stream& stream) const {
     uint32_t start, end, size;
     GetBounds(start, end, size, stream);
 
     return size;
   }
 
-  int GetAllocCount(const Stream &stream) const {
+  int GetAllocCount(const Stream& stream) const {
     uint32_t former_end, alloc_end, count;
     GetAllocCount(former_end, alloc_end, count, stream);
 
     return count;
   }
 
-  int GetAllocCountAndSync(const Stream &stream) const {
+  int GetAllocCountAndSync(const Stream& stream) const {
     uint32_t count = GetAllocCount(stream);
     SyncAppendAllocAsync(stream.cuda_stream);
     return count;
   }
 
-  void GetOffsetsDebug(uint32_t &capacity, uint32_t &start, uint32_t &end,
-                       uint32_t &alloc_end, uint32_t &size,
-                       const Stream &stream) const {
+  void GetOffsetsDebug(uint32_t& capacity, uint32_t& start, uint32_t& end,
+                       uint32_t& alloc_end, uint32_t& size,
+                       const Stream& stream) const {
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_host_start, m_start, sizeof(uint32_t),
                                       cudaMemcpyDeviceToHost,
                                       stream.cuda_stream));
@@ -858,25 +893,24 @@ public:
     size = end - start;
   }
 
-  uint32_t capacity() const {
-    return m_capacity;
-  }
+  uint32_t capacity() const { return m_capacity; }
 
-  void PrintOffsetsDebug(const Stream &stream) const {
+  void PrintOffsetsDebug(const Stream& stream) const {
     uint32_t capacity, start, end, alloc_end, size;
     GetOffsetsDebug(capacity, start, end, alloc_end, size, stream);
-    printf("\nCircularWorklist (Debug): start: %u, end: %u, alloc_end: %u, "
-           "size: %u (capacity: %u)",
-           start, end, alloc_end, size, capacity);
+    printf(
+        "\nCircularWorklist (Debug): start: %u, end: %u, alloc_end: %u, "
+        "size: %u (capacity: %u)",
+        start, end, alloc_end, size, capacity);
   }
 
-  std::vector<Segment<T>> ToSegs(const Stream &stream) {
+  std::vector<Segment<T>> ToSegs(const Stream& stream) {
     std::vector<Segment<T>> segs;
 
     uint32_t start, end, size;
     GetBounds(start, end, size, stream);
 
-    if (end > start) // normal case
+    if (end > start)  // normal case
     {
       segs.push_back(Segment<T>(m_data + start, size));
     } else if (start > end) {
@@ -891,6 +925,70 @@ public:
     return segs;
   }
 };
-} // namespace groute
 
-#endif // __GROUTE_WORKLIST_H
+template <typename T>
+struct WLPool {
+  using wl_t = std::shared_ptr<Worklist<T>>;
+  std::deque<wl_t> m_buffers;
+  std::deque<wl_t> m_buffers_in_use;
+
+  std::mutex m_lock, m_destructo_lock;
+
+  WLPool(uint32_t capacity, size_t numchunks) {
+    std::cout << capacity * sizeof(T) / 1024 / 1024 << " MB" << std::endl;
+
+    for (int i = 0; i < numchunks; ++i) {
+      m_buffers.push_back(std::make_shared<Worklist<T>>(capacity));
+    }
+  }
+
+  ~WLPool() {
+    std::lock_guard<std::mutex> guard2(m_destructo_lock);
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    if (m_buffers_in_use.size() > 0) {
+      printf("ERROR: SOME (%llu) BUFFERS ARE STILL IN USE, NOT DEALLOCATING\n",
+             m_buffers_in_use.size());
+    }
+
+    m_buffers.clear();
+    m_buffers_in_use.clear();
+  }
+
+  wl_t GetWorklist() {
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    if (m_buffers.empty())
+      return nullptr;
+
+    auto wl = m_buffers.front();
+    m_buffers.pop_front();
+    m_buffers_in_use.push_back(wl);
+    return wl;
+  }
+
+  void ReleaseBuffer(const wl_t& wl) {
+    std::lock_guard<std::mutex> guard(m_lock);
+
+    for (auto iter = m_buffers_in_use.begin(); iter != m_buffers_in_use.end();
+         ++iter) {
+      if ((*iter)->GetDataPtr() == wl->GetDataPtr()) {
+        m_buffers_in_use.erase(iter);
+        m_buffers.push_back(*iter);
+        return;
+      }
+    }
+    printf("ERROR: NO SUCH BUFFER EXISTS\n");
+  }
+
+  void ReleaseBufferEvent(const wl_t& wl, const Event& ev) {
+    std::lock_guard<std::mutex> guard(m_destructo_lock);
+
+    ev.Sync();
+
+    ReleaseBuffer(wl);
+  }
+};
+}  // namespace groute
+
+#endif  // __GROUTE_WORKLIST_H

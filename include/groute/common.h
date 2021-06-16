@@ -30,11 +30,10 @@
 #ifndef __GROUTE_COMMON_H
 #define __GROUTE_COMMON_H
 
-#include <memory>
-
 #include <climits>
 #include <future>
 #include <map>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
@@ -46,7 +45,8 @@ static inline __host__ __device__ size_t round_up(size_t numerator,
 
 // Adapted from
 // http://stackoverflow.com/questions/466204/rounding-up-to-nearest-power-of-2
-template <typename UnsignedType> UnsignedType next_power_2(UnsignedType v) {
+template <typename UnsignedType>
+UnsignedType next_power_2(UnsignedType v) {
   static_assert(std::is_unsigned<UnsignedType>::value,
                 "Only works for unsigned types");
   --v;
@@ -64,7 +64,7 @@ inline std::vector<int> range(int count, int from = 0) {
 
   return std::move(vec);
 }
-} // namespace
+}  // namespace
 
 namespace groute {
 
@@ -72,7 +72,7 @@ namespace groute {
  * @brief Device related metadata
  */
 class Device {
-public:
+ public:
   Device() = delete;
 
   enum : int { Null = INT32_MIN, Host = -1 };
@@ -106,19 +106,19 @@ struct Lane {
     device_t dev;
     LaneType type;
 
-    if (src_dev == dst_dev) // internal
+    if (src_dev == dst_dev)  // internal
     {
       dev = src_dev;
       type = Internal;
     }
 
-    else if (Device::IsHost(src_dev)) // host -> gpu
+    else if (Device::IsHost(src_dev))  // host -> gpu
     {
       dev = dst_dev;
       type = In;
     }
 
-    else // gpu -> host / peers
+    else  // gpu -> host / peers
     {
       dev = src_dev;
       type = Out;
@@ -131,49 +131,59 @@ struct Lane {
 /**
  * @brief Represents a raw memory buffer on some device
  */
-template <typename T> class Buffer {
-private:
-  T *const m_ptr;
+template <typename T>
+class Buffer {
+ private:
+  T* const m_ptr;
   const size_t m_size;
 
-public:
-  Buffer(T *ptr, size_t size) : m_ptr(ptr), m_size(size) {}
-  T *GetPtr() const { return m_ptr; }
+ public:
+  Buffer(T* ptr, size_t size) : m_ptr(ptr), m_size(size) {}
+  T* GetPtr() const { return m_ptr; }
   size_t GetSize() const { return m_size; }
 };
 
 /**
  * @brief Represents a segment copy of valid data (for some known datum)
  */
-template <typename T> class Segment {
-private:
-  T *m_segment_ptr;
+template <typename T>
+class Segment {
+ private:
+  T* m_segment_ptr;
   size_t m_total_size;
   size_t m_segment_size;
   size_t m_segment_offset;
 
-public:
-  Segment(T *segment_ptr, size_t total_size, size_t segment_size,
-          size_t segment_offset, std::shared_ptr<void> metadata = nullptr)
-      : m_segment_ptr(segment_ptr), m_total_size(total_size),
-        m_segment_size(segment_size), m_segment_offset(segment_offset),
+ public:
+  Segment(T* segment_ptr, size_t total_size, size_t segment_size,
+          size_t segment_offset, int metadata = -1)
+      : m_segment_ptr(segment_ptr),
+        m_total_size(total_size),
+        m_segment_size(segment_size),
+        m_segment_offset(segment_offset),
         metadata(metadata) {}
 
-  Segment(T *segment_ptr, size_t total_size, std::shared_ptr<void> metadata = nullptr)
-      : m_segment_ptr(segment_ptr), m_total_size(total_size),
-        m_segment_size(total_size), m_segment_offset(0), metadata(metadata) {}
+  Segment(T* segment_ptr, size_t total_size, int metadata = -1)
+      : m_segment_ptr(segment_ptr),
+        m_total_size(total_size),
+        m_segment_size(total_size),
+        m_segment_offset(0),
+        metadata(metadata) {}
 
   Segment()
-      : m_segment_ptr(nullptr), m_total_size(0), m_segment_size(0),
-        m_segment_offset(0), metadata(nullptr) {}
+      : m_segment_ptr(nullptr),
+        m_total_size(0),
+        m_segment_size(0),
+        m_segment_offset(0),
+        metadata(-1) {}
 
-  std::shared_ptr<void> metadata; // a metadata field for user customization
+  int metadata;  // a metadata field for user customization
 
   /// @brief is the segment empty
   bool Empty() const { return m_segment_size == 0; }
 
   /// @brief a pointer to segment start
-  T *GetSegmentPtr() const { return m_segment_ptr; }
+  T* GetSegmentPtr() const { return m_segment_ptr; }
 
   /// @brief The total size of the source datum
   size_t GetTotalSize() const { return m_total_size; }
@@ -190,7 +200,7 @@ public:
 #ifndef NDEBUG
     if (relative_offset > m_segment_size ||
         sub_segment_size > m_segment_size - relative_offset)
-      throw std::exception(); // out of segment range
+      throw std::exception();  // out of segment range
 #endif
     return Segment<T>(m_segment_ptr + relative_offset, m_total_size,
                       sub_segment_size, m_segment_offset + relative_offset,
@@ -201,9 +211,9 @@ public:
     if (max_subseg_size == 0)
       return {*this};
 
-    return GetSubSegment(0, (size_t)((max_subseg_size) > m_segment_size
-                                         ? (m_segment_size)
-                                         : max_subseg_size));
+    return GetSubSegment(
+        0, (size_t) ((max_subseg_size) > m_segment_size ? (m_segment_size)
+                                                        : max_subseg_size));
   }
 
   std::vector<Segment<T>> Split(size_t max_subseg_size) const {
@@ -217,9 +227,9 @@ public:
 
     while (pos < m_segment_size) {
       subsegs.push_back(
-          GetSubSegment(pos, (size_t)((pos + max_subseg_size) > m_segment_size
-                                          ? (m_segment_size - pos)
-                                          : max_subseg_size)));
+          GetSubSegment(pos, (size_t) ((pos + max_subseg_size) > m_segment_size
+                                           ? (m_segment_size - pos)
+                                           : max_subseg_size)));
 
       pos += max_subseg_size;
     }
@@ -228,7 +238,8 @@ public:
   }
 };
 
-template <typename Future> bool is_ready(const Future &f) {
+template <typename Future>
+bool is_ready(const Future& f) {
 #ifdef WIN32
   return f._Is_ready();
 #else
@@ -236,7 +247,8 @@ template <typename Future> bool is_ready(const Future &f) {
 #endif
 }
 
-template <typename T> std::shared_future<T> completed_future(const T &val) {
+template <typename T>
+std::shared_future<T> completed_future(const T& val) {
   std::promise<T> prom;
   std::shared_future<T> fut = prom.get_future();
   prom.set_value(val);
@@ -245,10 +257,10 @@ template <typename T> std::shared_future<T> completed_future(const T &val) {
 
 // workaround for C++11
 template <typename T, typename... Args>
-std::unique_ptr<T> make_unique(Args &&...args) {
+std::unique_ptr<T> make_unique(Args&&... args) {
   return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
 }
 
-} // namespace groute
+}  // namespace groute
 
-#endif // __GROUTE_COMMON_H
+#endif  // __GROUTE_COMMON_H

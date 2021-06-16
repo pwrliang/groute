@@ -517,12 +517,13 @@ class DistributedWorklistPeer
       // We may split a Segment by key into pieces
       for (auto output_seg : output_segs) {
         Stopwatch sw;
-#if 0
+#if 1
         sw.start();
         for (int i = 0; i < m_numsplit; i++) {
           auto& wl = m_split_wls[i];
           wl->ResetAsync(stream.cuda_stream);
         }
+        stream.Sync();
         sw.stop();
         stage1 += sw.ms();
 
@@ -552,14 +553,14 @@ class DistributedWorklistPeer
         sw.stop();
         stage3 += sw.ms();
 #else
-//        sw.start();
-//        auto& wl = m_split_wls[0];
-//        wl->ResetAsync(stream.cuda_stream);
-//        SplitSegment(stream, output_seg, m_dev_split_wls);
-//        output_seg = wl->ToSeg(stream);
-//        stream.Sync();
-//        sw.stop();
-//        stage2 += sw.ms();
+        //        sw.start();
+        //        auto& wl = m_split_wls[0];
+        //        wl->ResetAsync(stream.cuda_stream);
+        //        SplitSegment(stream, output_seg, m_dev_split_wls);
+        //        output_seg = wl->ToSeg(stream);
+        //        stream.Sync();
+        //        sw.stop();
+        //        stage2 += sw.ms();
 
         sw.start();
         auto ev = m_link_out.Send(output_seg, Event()).get();

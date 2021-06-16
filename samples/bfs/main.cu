@@ -47,7 +47,8 @@ struct App {
   static bool Single() { return TestBFSSingle(); }
 
   static bool AsyncMulti(int G) {
-    return FLAGS_opt ? TestBFSAsyncMultiOptimized(G) : TestBFSAsyncMulti(G);
+    return TestBFSAsyncMulti(G);
+//    return FLAGS_opt ? TestBFSAsyncMultiOptimized(G) : TestBFSAsyncMulti(G);
   }
 
   static void Cleanup() { CleanupGraphs(); }

@@ -4,6 +4,22 @@ project (groute LANGUAGES CXX CUDA)
 ############## DEPENDENCIES ##############
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+
+# ------------------------------------------------------------------------------
+# setting default cmake type to Release
+# ------------------------------------------------------------------------------
+
+set(DEFAULT_BUILD_TYPE "Release")
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "Setting build type to '${DEFAULT_BUILD_TYPE}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${DEFAULT_BUILD_TYPE}" CACHE
+          STRING "Choose the type of build." FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+          "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+endif ()
+
+message("[groute] will build in type: ${CMAKE_BUILD_TYPE}")
+
 # GFlags
 add_subdirectory(deps/gflags)
 include_directories(${PROJECT_BINARY_DIR}/deps/gflags/include)
@@ -44,14 +60,19 @@ find_package(CUDAToolkit)
 
 set(CMAKE_CUDA_ARCHITECTURES "60;70") #60;61
 
-
-
 ############## BUILD ##############
 
 include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/deps/thrust)
 set(EXTRA_LIBS gflags_static pthread ${METIS_LIBRARIES} CUDA::nvToolsExt CUDA::cuda_driver)
 set(CMAKE_CUDA_STANDARD 14)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda")
+
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message("Debug mode")
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -g -lineinfo -Xcompiler -ggdb -std=c++14 --extended-lambda")
+else ()
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -DNDEBUG -Xcompiler -DNDEBUG -std=c++14 --extended-lambda")
+endif ()
+
 
 include_directories(${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${METIS_INCLUDE_DIRS})
 add_executable(cc src/utils/parser.cu src/utils/utils.cu
@@ -60,7 +81,7 @@ target_link_libraries(cc PRIVATE ${EXTRA_LIBS})
 
 add_executable(bfs src/utils/parser.cu src/utils/utils.cu src/groute/graphs/csr_graph.cu
         samples/bfs/bfs_async.cu
-        samples/bfs/bfs_async_opt.cu
+#        samples/bfs/bfs_async_opt.cu
         samples/bfs/bfs_host.cu
         samples/bfs/main.cu)
 target_link_libraries(bfs ${EXTRA_LIBS})

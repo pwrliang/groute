@@ -29,7 +29,7 @@
 
 #ifndef __GROUTE_WORKLIST_H
 #define __GROUTE_WORKLIST_H
-
+#include <cooperative_groups.h>
 #include <cuda_runtime.h>
 #include <groute/event_pool.h>
 
@@ -92,6 +92,18 @@ class Worklist {
 
     allocation = cub::ShuffleIndex<32>(allocation, first, __activemask());
     m_data[allocation + offset] = item;
+  }
+
+  __device__ void append_warp1(const T& item) const {
+    auto g = cooperative_groups::coalesced_threads();
+    uint32_t warp_res;
+
+    if (g.thread_rank() == 0) {
+      warp_res = atomicAdd((uint32_t*) m_count, g.size());
+    }
+    auto begin = g.shfl(warp_res, 0) + g.thread_rank();
+    assert(begin < m_capacity);
+    m_data[begin] = item;
   }
 
   __device__ void append_warp(const T& item, int leader, int warp_count,

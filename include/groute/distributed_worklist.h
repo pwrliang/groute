@@ -196,22 +196,25 @@ struct IDistributedWorklist {
 
 template <typename T>
 void SplitSegment(groute::Stream& stream, Segment<T>& segment,
-                  thrust::device_vector<dev::Worklist<T>>& wl) {
-  dev::Worklist<T>* d_dev_wl = thrust::raw_pointer_cast(wl.data());
+                  std::vector<std::shared_ptr<Worklist<T>>>& wl) {
   size_t seg_size = segment.GetSegmentSize();
   T* data = segment.GetSegmentPtr();
   size_t num_split = wl.size();
 
-  LaunchKernel(stream, seg_size, [=] __device__() {
-    auto tid = TID_1D;
-    auto nthreads = TOTAL_THREADS_1D;
+  for (int idx = 0; idx < num_split; idx++) {
+    dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
 
-    for (int i = 0 + tid; i < seg_size; i += nthreads) {
-      int idx = data[i] % num_split;
+    LaunchKernel(stream, seg_size, [=] __device__() {
+      auto tid = TID_1D;
+      auto nthreads = TOTAL_THREADS_1D;
 
-      d_dev_wl[idx].append(data[i]);
-    }
-  });
+      for (int i = 0 + tid; i < seg_size; i += nthreads) {
+        if (idx == data[i] % num_split) {
+          d_dev_wl.append_warp(data[i]);
+        }
+      }
+    });
+  }
 }
 
 template <typename TLocal, typename TRemote>
@@ -296,6 +299,7 @@ class DistributedWorklistPeer
   thrust::device_vector<dev::Worklist<TRemote>> m_dev_split_wls;
 
   double stage1{}, stage2{}, stage3{};
+  uint32_t launch_times{};
 
   void SplitReceive(const groute::Segment<TRemote>& received_work,
                     groute::CircularWorklist<TLocal>& local_work,
@@ -513,9 +517,8 @@ class DistributedWorklistPeer
       // We may split a Segment by key into pieces
       for (auto output_seg : output_segs) {
         Stopwatch sw;
-
+#if 0
         sw.start();
-
         for (int i = 0; i < m_numsplit; i++) {
           auto& wl = m_split_wls[i];
           wl->ResetAsync(stream.cuda_stream);
@@ -524,7 +527,8 @@ class DistributedWorklistPeer
         stage1 += sw.ms();
 
         sw.start();
-        SplitSegment(stream, output_seg, m_dev_split_wls);
+        SplitSegment(stream, output_seg, m_split_wls);
+        launch_times++;
         stream.Sync();
         sw.stop();
         stage2 += sw.ms();
@@ -538,16 +542,31 @@ class DistributedWorklistPeer
           // Now send m_send_remote_output_worklist or
           // m_pass_remote_output_worklist along with out link
           auto ev = m_link_out.Send(seg, Event()).get();
-//          ev.Wait(stream.cuda_stream);
-                    events.template emplace_back(std::move(ev));
+          events.template emplace_back(std::move(ev));
         }
 
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
-                    auto& ev = events[seg_idx];
-                    ev.Wait(stream.cuda_stream);
+          auto& ev = events[seg_idx];
+          ev.Wait(stream.cuda_stream);
         }
         sw.stop();
         stage3 += sw.ms();
+#else
+//        sw.start();
+//        auto& wl = m_split_wls[0];
+//        wl->ResetAsync(stream.cuda_stream);
+//        SplitSegment(stream, output_seg, m_dev_split_wls);
+//        output_seg = wl->ToSeg(stream);
+//        stream.Sync();
+//        sw.stop();
+//        stage2 += sw.ms();
+
+        sw.start();
+        auto ev = m_link_out.Send(output_seg, Event()).get();
+        ev.Wait(stream.cuda_stream);
+        sw.stop();
+        stage3 += sw.ms();
+#endif
         // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);
@@ -570,7 +589,7 @@ class DistributedWorklistPeer
         m_flags(flags),
         m_link_in(router, dev, max_exch_size, exch_buffs),
         m_link_out(dev, router),
-        m_numsplit(2) {
+        m_numsplit(router.GetPolicy()->GetRouteNum()) {
     void* mem_buffer;
     size_t mem_size;
 
@@ -598,7 +617,7 @@ class DistributedWorklistPeer
 
     for (int i = 0; i < m_numsplit; i++) {
       auto wl = std::make_shared<Worklist<TRemote>>(
-          m_send_remote_output_worklist.capacity() / m_numsplit / 2, 1);
+          m_send_remote_output_worklist.capacity() / m_numsplit / 1.5, 1);
       wl->ResetAsync((cudaStream_t) 0);
       m_split_wls.push_back(wl);
       m_dev_split_wls.push_back(wl->DeviceObject());
@@ -614,7 +633,8 @@ class DistributedWorklistPeer
     m_receive_thread.join();
     m_send_thread.join();
     std::cout << "Stage1: " << stage1 << " Stage2: " << stage2
-              << " Stage3: " << stage3 << std::endl;
+              << " Stage3: " << stage3 << " Launch Times: " << launch_times
+              << std::endl;
   }
 
   CircularWorklist<TLocal>& GetLocalInputWorklist() override {

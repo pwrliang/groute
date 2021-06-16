@@ -93,6 +93,8 @@ class Policy : public IPolicy {
     return Route(topology.at(src_dev), m_strategy);
   }
 
+  int GetRouteNum() const override { return m_tables.size(); }
+
   static std::shared_ptr<IPolicy> CreateBroadcastPolicy(
       device_t src_dev, const std::vector<device_t>& dst_devs) {
     RoutingTable topology;
@@ -200,9 +202,11 @@ class Policy : public IPolicy {
     if (ndevs != 8) {
       return CreateRingPolicy(ndevs);
     }
-
-    std::vector<std::vector<int>> seqs{{0, 6, 5, 4, 7, 1, 2, 3},
-                                       {0, 3, 2, 1, 7, 4, 5, 6}};
+    std::vector<std::vector<int>> seqs;
+    //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});
+    //    seqs.push_back({0, 2, 3, 1, 7, 5, 4, 6});
+    //    seqs.push_back({0, 1, 7, 6, 4, 5, 3, 2});
+    seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});
     std::vector<RoutingTable> tables;
 
     for (auto& seq : seqs) {
@@ -218,6 +222,7 @@ class Policy : public IPolicy {
       topology[Device::Host] = range(ndevs);  // for initial work from host
       tables.push_back(topology);
     }
+
     return std::make_shared<Policy>(tables, Availability);
   }
 };

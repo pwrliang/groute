@@ -225,15 +225,16 @@ struct Route {
 };
 
 struct IPolicy {
-  virtual ~IPolicy() {}
+  virtual ~IPolicy() = default;
 
   virtual RoutingTable GetRoutingTable() = 0;  // TODO: we can avoid this
   virtual Route GetRoute(device_t src_dev, int message_metadata) = 0;
+  virtual int GetRouteNum() const = 0;
 };
 
 struct IRouterBase  // an untyped base interface for the Router
 {
-  virtual ~IRouterBase() {}
+  virtual ~IRouterBase() = default;
   virtual void Shutdown() = 0;
 };
 
@@ -247,6 +248,8 @@ struct IRouter : IRouterBase {
 
   virtual std::unique_ptr<IPipelinedReceiver<T>> CreatePipelinedReceiver(
       device_t dev, size_t chunk_size, size_t num_buffers) = 0;
+
+  virtual std::shared_ptr<IPolicy> GetPolicy() const = 0;
 };
 
 template <typename T>
@@ -757,6 +760,8 @@ class Router : public IRouter<T> {
     return groute::make_unique<PipelinedReceiver<T>>(
         m_context, GetReceiver(dev), dev, chunk_size, num_buffers);
   }
+
+  std::shared_ptr<IPolicy> GetPolicy() const override { return m_policy; }
 };
 }  // namespace router
 }  // namespace groute

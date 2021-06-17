@@ -30,29 +30,52 @@
 #ifndef __GROUTE_MEMCPY_H
 #define __GROUTE_MEMCPY_H
 
-#include <cassert>
-#include <functional>
-#include <future>
-#include <initializer_list>
-#include <map>
-#include <memory>
-#include <vector>
-
 #include <cuda_runtime.h>
-
+#include <groute/common.h>
+#include <groute/event_pool.h>
 #include <groute/internal/cuda_utils.h>
 #include <groute/internal/pinned_allocation.h>
 #include <groute/internal/worker.h>
 
-#include <groute/common.h>
-#include <groute/event_pool.h>
+#include <cassert>
+#include <functional>
+#include <future>
+#include <initializer_list>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <vector>
 
 namespace groute {
 
-typedef std::function<void(size_t, const Event &)> MemcpyCallback;
+typedef std::function<void(size_t, const Event&)> MemcpyCallback;
+
+__global__ static void copyp2p(void* dest, const void* src, size_t size) {
+  size_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t gridSize = blockDim.x * gridDim.x;
+  auto unit_size = sizeof(int4);
+  auto num_elems = size / unit_size;
+  auto rest_bytes = size % unit_size;
+
+  auto* dest_4 = (int4*) dest;
+  auto* src_4 = (const int4*) src;
+
+#pragma unroll
+  for (size_t i = globalId; i < num_elems; i += gridSize) {
+    dest_4[i] = src_4[i];
+  }
+
+  auto* dest_c = (char*) dest + size - rest_bytes;
+  auto* src_c = (const char*) src + size - rest_bytes;
+
+#pragma unroll
+  for (size_t i = globalId; i < rest_bytes; i += gridSize) {
+    dest_c[i] = src_c[i];
+  }
+}
 
 class MemcpyWork : public groute::internal::IWork {
-public:
+ public:
   int src_dev_id;
   int dst_dev_id;
 
@@ -61,8 +84,8 @@ public:
 
   const int fragment_size;
 
-  void *src_buffer;
-  void *dst_buffer;
+  void* src_buffer;
+  void* dst_buffer;
 
   Event src_ready_event;
   Event dst_ready_event;
@@ -72,8 +95,10 @@ public:
 
   MemcpyCallback completion_callback;
 
-private:
-  EventPool &m_event_pool;
+  std::atomic<int>& active_count;
+
+ private:
+  EventPool& m_event_pool;
 
   void CheckParams() const {
     // Verifying since parameters are expected to be provided by multiple
@@ -91,51 +116,70 @@ private:
     assert(copy_bytes <= dst_size);
   }
 
-  void CopyAsync(void *dst_buffer, const void *src_buffer, size_t count) const {
+  void CopyAsync(void* dst_buffer, const void* src_buffer, size_t count) const {
     if (!Device::IsHost(src_dev_id) &&
-        !Device::IsHost(dst_dev_id)) // dev to dev
+        !Device::IsHost(dst_dev_id))  // dev to dev
     {
-      GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id, src_buffer,
-                                            src_dev_id, count, copy_stream));
+      int access;
+      GROUTE_CUDA_CHECK(
+          cudaDeviceCanAccessPeer(&access, src_dev_id, dst_dev_id));
+      int prev_count = active_count.fetch_add(1);
+
+      if (access && prev_count > 1) {
+        copyp2p<<<1, 256, 0, copy_stream>>>(dst_buffer, src_buffer, count);
+      } else {
+        GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id,
+                                              src_buffer, src_dev_id, count,
+                                              copy_stream));
+      }
     }
 
-    else if (Device::IsHost(src_dev_id)) // host to dev
+    else if (Device::IsHost(src_dev_id))  // host to dev
     {
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
                                         cudaMemcpyHostToDevice, copy_stream));
     }
 
-    else if (Device::IsHost(dst_dev_id)) // dev to host
+    else if (Device::IsHost(dst_dev_id))  // dev to host
     {
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
                                         cudaMemcpyDeviceToHost, copy_stream));
     }
 
-    else // host to host
+    else  // host to host
     {
-      assert(false); // TODO: std::memcpy(dst_buffer, src_buffer, count);
+      assert(false);  // TODO: std::memcpy(dst_buffer, src_buffer, count);
     }
   }
 
-  void Complete(size_t bytes, const Event &ev) const {
+  void Complete(size_t bytes, const Event& ev) const {
     if (completion_callback)
       completion_callback(bytes, ev);
+    active_count.fetch_sub(1);
   }
 
-public:
-  MemcpyWork(EventPool &event_pool, int fragment_size = -1)
-      : m_event_pool(event_pool), src_dev_id(Device::Null),
-        dst_dev_id(Device::Null), fragment_size(fragment_size), copy_bytes(0),
-        dst_size(0), src_buffer(nullptr), dst_buffer(nullptr),
-        copy_stream(nullptr), sync_event(nullptr),
-        completion_callback(nullptr) {
+ public:
+  MemcpyWork(EventPool& event_pool, std::atomic<int>& atomic,
+             int fragment_size = -1)
+      : m_event_pool(event_pool),
+        src_dev_id(Device::Null),
+        dst_dev_id(Device::Null),
+        fragment_size(fragment_size),
+        copy_bytes(0),
+        dst_size(0),
+        src_buffer(nullptr),
+        dst_buffer(nullptr),
+        copy_stream(nullptr),
+        sync_event(nullptr),
+        completion_callback(nullptr),
+        active_count(atomic) {
 #ifndef NDEBUG
     if (fragment_size < -1 || fragment_size == 0)
       throw std::invalid_argument("invalid value for fragment_size");
 #endif
   }
 
-  void operator()(groute::internal::Barrier *barrier) override {
+  void operator()(groute::internal::Barrier* barrier) override {
 #ifndef NDEBUG
     CheckParams();
 #endif
@@ -143,30 +187,28 @@ public:
     src_ready_event.Wait(copy_stream);
     dst_ready_event.Wait(copy_stream);
 
-    if (fragment_size < 0) // No fragmentation
+    if (fragment_size < 0)  // No fragmentation
     {
       CopyAsync(dst_buffer, src_buffer, copy_bytes);
-    }
-
-    else {
+    } else {
       // Fragmented Copy
+      auto fragment = fragment_size;
+      size_t pos = 0;
 
-      int fragment = fragment_size < 0 ? copy_bytes : fragment_size;
-      int pos = 0;
       while (pos < copy_bytes) {
-        void *receive = ((void *)((char *)dst_buffer + pos));
-        void *send = ((void *)((char *)src_buffer + pos));
+        void* receive = ((void*) ((char*) dst_buffer + pos));
+        void* send = ((void*) ((char*) src_buffer + pos));
 
         CopyAsync(receive, send,
-                  (size_t)((pos + fragment) > copy_bytes ? (copy_bytes - pos)
-                                                         : fragment));
+                  (size_t) ((pos + fragment) > copy_bytes ? (copy_bytes - pos)
+                                                          : fragment));
 
         pos += fragment;
 
         if (pos >= copy_bytes)
-          break; // Avoid syncing on last segment
+          break;  // Avoid syncing on last segment
 
-        // We must sync the host thread in order to achive real fragmentation
+        // We must sync the host thread in order to achieve real fragmentation
         //
         GROUTE_CUDA_CHECK(cudaEventRecord(sync_event, copy_stream));
         GROUTE_CUDA_CHECK(cudaEventSynchronize(sync_event));
@@ -183,12 +225,12 @@ struct IMemcpyInvoker {
 };
 
 class MemcpyInvoker : public IMemcpyInvoker {
-protected:
-  const int m_dev_id; // the real dev id
+ protected:
+  const int m_dev_id;  // the real dev id
   cudaStream_t m_copy_stream;
   cudaEvent_t m_sync_event;
 
-public:
+ public:
   MemcpyInvoker(int dev_id) : m_dev_id(dev_id) {
     GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
     GROUTE_CUDA_CHECK(
@@ -204,7 +246,7 @@ public:
 
   void InvokeCopyAsync(std::shared_ptr<MemcpyWork> memcpy_work) override {
     assert(memcpy_work->fragment_size ==
-           -1); // this invoker does not support fragmentation
+           -1);  // this invoker does not support fragmentation
 
     int current_dev;
     GROUTE_CUDA_CHECK(cudaGetDevice(&current_dev));
@@ -215,21 +257,21 @@ public:
     memcpy_work->copy_stream = m_copy_stream;
     memcpy_work->sync_event = m_sync_event;
 
-    (*memcpy_work)(nullptr); // invoke
+    (*memcpy_work)(nullptr);  // invoke
 
-    if (current_dev != m_dev_id) // set back to the correct device
+    if (current_dev != m_dev_id)  // set back to the correct device
       GROUTE_CUDA_CHECK(cudaSetDevice(current_dev));
   }
 };
 
 class MemcpyWorker : public groute::internal::Worker<MemcpyWork>,
                      public IMemcpyInvoker {
-private:
-  const int m_dev_id; // the real dev id
+ private:
+  const int m_dev_id;  // the real dev id
   cudaStream_t m_copy_stream;
   cudaEvent_t m_sync_event;
 
-protected:
+ protected:
   /// Called by the worker thread on start
   void OnStart() override {
     GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
@@ -244,7 +286,7 @@ protected:
     work->sync_event = m_sync_event;
   }
 
-public:
+ public:
   explicit MemcpyWorker(int dev_id)
       : groute::internal::Worker<MemcpyWork>(nullptr), m_dev_id(dev_id) {
     this->Run();
@@ -259,6 +301,6 @@ public:
     this->Enqueue(memcpy_work);
   }
 };
-} // namespace groute
+}  // namespace groute
 
-#endif // __GROUTE_MEMCPY_H
+#endif  // __GROUTE_MEMCPY_H

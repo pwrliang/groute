@@ -214,11 +214,12 @@ class Policy : public IPolicy {
     std::vector<std::vector<int>> seqs;
 //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});
     //    seqs.push_back({0, 1, 7, 6, 4, 5, 3, 2});
-    //seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});
+    seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6}); // lane * 2
+
 
     //seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3}); // fastest
-    seqs.push_back({0, 2, 3, 1, 7, 5, 4, 6});
-    seqs.push_back({0, 1, 2, 3, 5, 6, 7, 4});
+//    seqs.push_back({0, 2, 3, 1, 7, 5, 4, 6});
+//    seqs.push_back({0, 1, 2, 3, 5, 6, 7, 4});
 
     std::vector<RoutingTable> tables;
 

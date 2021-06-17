@@ -68,6 +68,10 @@ struct DistanceData {
       : node(node), distance(distance) {}
   __device__ __host__ __forceinline__ DistanceData()
       : node(INF), distance(INF) {}
+
+  __device__ __host__ __forceinline__ int operator%(int rhs) {
+    return ((node * 39) ^ distance) % rhs;
+  }
 };
 
 typedef index_t local_work_t;

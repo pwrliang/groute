@@ -57,9 +57,10 @@ struct App {
   }
 
   static bool AsyncMulti(int G) {
-    return FLAGS_opt  ? TestSSSPAsyncMultiOptimized(G)
-           : FLAGS_nf ? TestSSSPAsyncMulti__NF__(G)
-                      : TestSSSPAsyncMulti(G);
+    return TestSSSPAsyncMulti(G);
+//    return FLAGS_opt  ? TestSSSPAsyncMultiOptimized(G)
+//           : FLAGS_nf ? TestSSSPAsyncMulti__NF__(G)
+//                      : TestSSSPAsyncMulti(G);
   }
 
   static void Cleanup() { CleanupGraphs(); }

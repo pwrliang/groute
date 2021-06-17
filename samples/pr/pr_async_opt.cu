@@ -62,6 +62,10 @@ struct RankData {
       : node(node), rank(rank) {}
   __host__ __device__ __forceinline__ RankData()
       : node(UINT_MAX), rank(-1.0f) {}
+
+  __device__ __host__ __forceinline__ int operator%(int rhs) {
+    return node % rhs;
+  }
 };
 
 typedef index_t local_work_t;

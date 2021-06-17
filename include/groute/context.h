@@ -30,6 +30,16 @@
 #ifndef __GROUTE_CONTEXT_H
 #define __GROUTE_CONTEXT_H
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <groute/common.h>
+#include <groute/event_pool.h>
+#include <groute/internal/cuda_utils.h>
+#include <groute/internal/pinned_allocation.h>
+#include <groute/internal/worker.h>
+#include <groute/memcpy.h>
+#include <groute/memory_pool.h>
+
 #include <cassert>
 #include <functional>
 #include <future>
@@ -39,32 +49,20 @@
 #include <set>
 #include <vector>
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-
-#include <groute/internal/cuda_utils.h>
-#include <groute/internal/pinned_allocation.h>
-#include <groute/internal/worker.h>
-
-#include <groute/common.h>
-#include <groute/event_pool.h>
-#include <groute/memcpy.h>
-#include <groute/memory_pool.h>
-
 namespace groute {
 
 /*
  * @brief The global groute context
  */
 class Context {
-private:
+ private:
   std::map<device_t, int> m_dev_map;
 
-  int m_fragment_size; // TODO: should this be a global configuration, or a
-                       // router decision?
+  int m_fragment_size;  // TODO: should this be a global configuration, or a
+                        // router decision?
 
   std::set<int>
-      m_physical_devs; // the physical devs currently in use by this context
+      m_physical_devs;  // the physical devs currently in use by this context
   std::map<int, std::unique_ptr<EventPool>> m_event_pools;
 
   std::map<LaneIdentifier, std::shared_ptr<IMemcpyInvoker>> m_memcpy_invokers;
@@ -72,7 +70,9 @@ private:
 
   std::map<int, std::unique_ptr<MemoryPool>> m_memory_pools;
 
-public:
+  std::map<int, std::atomic<int>> active_copies;
+
+ public:
   void RequireMemcpyLane(int src_dev, int dst_dev) {
     assert(m_dev_map.find(src_dev) != m_dev_map.end());
     assert(m_dev_map.find(dst_dev) != m_dev_map.end());
@@ -84,17 +84,18 @@ public:
       m_memcpy_invokers[lane_identifier] =
           (m_fragment_size < 0)
               ? (std::shared_ptr<IMemcpyInvoker>)
-                    std::make_shared<MemcpyInvoker>(
-                        m_dev_map.at(lane_identifier.first)) // no fragmentation
-              : (std::shared_ptr<IMemcpyInvoker>)std::make_shared<MemcpyWorker>(
-                    m_dev_map.at(
-                        lane_identifier.first)); // for fragmentation a
-                                                 // dedicated worker is required
+                    std::make_shared<MemcpyInvoker>(m_dev_map.at(
+                        lane_identifier.first))  // no fragmentation
+              : (std::shared_ptr<IMemcpyInvoker>)
+                    std::make_shared<MemcpyWorker>(m_dev_map.at(
+                        lane_identifier
+                            .first));  // for fragmentation a
+                                       // dedicated worker is required
     }
   }
 
-  void RequireMemcpyLanes(const RoutingTable &required_routes) {
-    for (auto &p : required_routes) {
+  void RequireMemcpyLanes(const RoutingTable& required_routes) {
+    for (auto& p : required_routes) {
       device_t src_dev = p.first;
       for (auto dst_dev : p.second) {
         RequireMemcpyLane(src_dev, dst_dev);
@@ -102,9 +103,9 @@ public:
     }
   }
 
-private:
+ private:
   void InitPhysicalDevs() {
-    for (auto &p : m_dev_map) {
+    for (auto& p : m_dev_map) {
       if (p.second == Device::Host)
         continue;
       m_physical_devs.insert(p.second);
@@ -116,6 +117,10 @@ private:
         if (physical_dev_i != physical_dev_j)
           cudaDeviceEnablePeerAccess(physical_dev_j, 0);
     }
+
+    for (int physical_dev : m_physical_devs) {
+      active_copies[physical_dev] = 0;
+    }
   }
 
   void CreateEventPools() {
@@ -125,7 +130,7 @@ private:
     }
   }
 
-public:
+ public:
   Context() : m_fragment_size(-1) {
     int actual_ngpus;
     GROUTE_CUDA_CHECK(cudaGetDeviceCount(&actual_ngpus));
@@ -148,7 +153,7 @@ public:
 
     for (device_t i = 0; i < ngpus; ++i) {
       m_dev_map[i] =
-          i % actual_ngpus; // The real CUDA GPU index for all virtual GPUs
+          i % actual_ngpus;  // The real CUDA GPU index for all virtual GPUs
     }
     // host
     m_dev_map[Device::Host] = Device::Host;
@@ -158,18 +163,19 @@ public:
     InitMemoryPools();
   }
 
-  Context(const std::map<device_t, int> &dev_map)
+  Context(const std::map<device_t, int>& dev_map)
       : m_dev_map(dev_map), m_fragment_size(-1) {
     int actual_ngpus;
     GROUTE_CUDA_CHECK(cudaGetDeviceCount(&actual_ngpus));
 
-    for (auto &p : m_dev_map) {
+    for (auto& p : m_dev_map) {
       if (Device::IsHost(p.second))
         continue;
       if (p.second < 0 || p.second >= actual_ngpus) {
-        printf("\n\nWarning: %d is claimed to be a physical device but is not "
-               "(actual_ngpus = %d), exiting.\n\n",
-               p.second, actual_ngpus);
+        printf(
+            "\n\nWarning: %d is claimed to be a physical device but is not "
+            "(actual_ngpus = %d), exiting.\n\n",
+            p.second, actual_ngpus);
         exit(1);
       }
     }
@@ -179,11 +185,10 @@ public:
     InitMemoryPools();
   }
 
-  std::shared_ptr<groute::MemcpyWork>
-  QueueMemcpyWork(int src_dev, void *src_buffer, int dst_dev, void *dst_buffer,
-                  size_t count, const Event &src_ready_event,
-                  const Event &dst_ready_event,
-                  const MemcpyCallback &callback) {
+  std::shared_ptr<groute::MemcpyWork> QueueMemcpyWork(
+      int src_dev, void* src_buffer, int dst_dev, void* dst_buffer,
+      size_t count, const Event& src_ready_event, const Event& dst_ready_event,
+      const MemcpyCallback& callback) {
     LaneIdentifier lane_identifier = Lane(src_dev, dst_dev).GetIdentifier();
 
     int src_dev_id = m_dev_map.at(src_dev);
@@ -194,7 +199,7 @@ public:
     int stream_dev_id = m_dev_map.at(lane_identifier.first);
 
     auto copy = std::make_shared<groute::MemcpyWork>(
-        *m_event_pools[stream_dev_id], m_fragment_size);
+        *m_event_pools[stream_dev_id], active_copies[src_dev], m_fragment_size);
 
     copy->src_dev_id = src_dev_id;
     copy->src_buffer = src_buffer;
@@ -227,14 +232,14 @@ public:
     num_evs =
         num_evs *
         round_up(m_dev_map.size() - 1 /*- host*/,
-                 m_physical_devs.size()); // approximation for each real GPU
+                 m_physical_devs.size());  // approximation for each real GPU
 
     for (int physical_dev : m_physical_devs) {
       m_event_pools.at(physical_dev)->CacheEvents(num_evs);
     }
   }
 
-  const std::map<int, int> &GetDevMap() const { return m_dev_map; }
+  const std::map<int, int>& GetDevMap() const { return m_dev_map; }
 
   int GetDevId(int dev) const { return m_dev_map.at(dev); }
 
@@ -273,7 +278,7 @@ public:
     return Stream(priority);
   }
 
-  EventPool &GetEventPool(int dev) const {
+  EventPool& GetEventPool(int dev) const {
     return *m_event_pools.at(m_dev_map.at(dev));
   }
 
@@ -289,7 +294,7 @@ public:
 
   // -----------------
 
-private:
+ private:
   void InitMemoryPools() {
     GROUTE_CUDA_DAPI_CHECK(cuInit(0));
 
@@ -299,44 +304,44 @@ private:
     }
   }
 
-public:
+ public:
   void ReserveMemory(size_t membytes) {
-    for (auto &pair : m_memory_pools) {
+    for (auto& pair : m_memory_pools) {
       pair.second->ReserveMemory(membytes);
     }
   }
 
   void ReserveFreeMemoryPercentage(
-      float percent = 0.9f) // Default: 90% of free memory
+      float percent = 0.9f)  // Default: 90% of free memory
   {
-    for (auto &pair : m_memory_pools) {
+    for (auto& pair : m_memory_pools) {
       pair.second->ReserveFreeMemoryPercentage(percent);
     }
   }
 
-  void *Alloc(device_t dev, size_t size) {
+  void* Alloc(device_t dev, size_t size) {
     return m_memory_pools.at(m_dev_map.at(dev))->Alloc(size);
   }
 
-  void *Alloc(device_t dev, double hint, size_t &size,
+  void* Alloc(device_t dev, double hint, size_t& size,
               AllocationFlags flags = AF_None) {
-    double vpp = (double)(m_dev_map.size() - 1) /
-                 m_physical_devs.size(); // virtual per physical
+    double vpp = (double) (m_dev_map.size() - 1) /
+                 m_physical_devs.size();  // virtual per physical
     return m_memory_pools.at(m_dev_map.at(dev))->Alloc(hint / vpp, size, flags);
   }
 
-  void *Alloc(size_t size) {
+  void* Alloc(size_t size) {
     int current_physical_dev;
     GROUTE_CUDA_CHECK(cudaGetDevice(&current_physical_dev));
     return m_memory_pools.at(current_physical_dev)->Alloc(size);
   }
 
-  void *Alloc(double hint, size_t &size, AllocationFlags flags = AF_None) {
+  void* Alloc(double hint, size_t& size, AllocationFlags flags = AF_None) {
     int current_physical_dev;
     GROUTE_CUDA_CHECK(cudaGetDevice(&current_physical_dev));
 
-    double vpp = (double)(m_dev_map.size() - 1) /
-                 m_physical_devs.size(); // virtual per physical
+    double vpp = (double) (m_dev_map.size() - 1) /
+                 m_physical_devs.size();  // virtual per physical
     return m_memory_pools.at(current_physical_dev)
         ->Alloc(hint / vpp, size, flags);
   }
@@ -345,12 +350,12 @@ public:
 
   void PrintStatus() const {
     printf("\nDevice map:");
-    for (auto &p : m_dev_map) {
+    for (auto& p : m_dev_map) {
       printf("\n\tVirtual: %d,\tPhysical: %d", p.first, p.second);
     }
 
     printf("\nMemcpy lanes:");
-    for (auto &p : m_memcpy_invokers) {
+    for (auto& p : m_memcpy_invokers) {
       printf("\n\tDevice (virtual): %d,\tLane: %s", p.first.first,
              p.first.second == In    ? "In"
              : p.first.second == Out ? "Out"
@@ -359,12 +364,12 @@ public:
     printf("\nFragmentation: %d", m_fragment_size);
 
     printf("\nEvent pools:");
-    for (auto &p : m_event_pools) {
+    for (auto& p : m_event_pools) {
       printf("\n\tDevice (physical): %d,\tCached events: %d", p.first,
              p.second->GetCachedEventsNum());
     }
   }
 };
-} // namespace groute
+}  // namespace groute
 
-#endif // __GROUTE_CONTEXT_H
+#endif  // __GROUTE_CONTEXT_H

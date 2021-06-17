@@ -66,7 +66,8 @@ struct LevelData {
   __device__ __host__ __forceinline__ LevelData() : node(INF), level(INF) {}
 
   __device__ __host__ __forceinline__ int operator%(int rhs) {
-    return ((node * 39) ^ level) % rhs;
+//    return ((node * 39) ^ level) % rhs;
+    return node % rhs;
   }
 };
 

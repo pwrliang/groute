@@ -29,7 +29,7 @@
 
 #ifndef __GROUTE_COMMON_H
 #define __GROUTE_COMMON_H
-
+#include <assert.h>
 #include <climits>
 #include <future>
 #include <map>

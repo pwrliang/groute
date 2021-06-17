@@ -591,6 +591,8 @@ class DistributedWorklistPeer
         m_link_in(router, dev, max_exch_size, exch_buffs),
         m_link_out(dev, router),
         m_numsplit(router.GetPolicy()->GetRouteNum()) {
+    m_numsplit = 8;
+
     void* mem_buffer;
     size_t mem_size;
 

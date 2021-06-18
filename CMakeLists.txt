@@ -94,7 +94,9 @@ add_executable(sssp src/utils/parser.cu src/utils/utils.cu src/groute/graphs/csr
 target_link_libraries(sssp ${EXTRA_LIBS})
 
 add_executable(pr src/utils/parser.cu src/utils/utils.cu src/groute/graphs/csr_graph.cu
-        samples/pr/pr_async.cu samples/pr/pr_async_opt.cu samples/pr/pr_host.cu
+        samples/pr/pr_async.cu
+#        samples/pr/pr_async_opt.cu
+        samples/pr/pr_host.cu
         samples/pr/main.cu)
 target_link_libraries(pr ${EXTRA_LIBS} CUDA::cuda_driver)
 
@@ -124,3 +126,6 @@ target_link_libraries(async-tests gtest dl ${EXTRA_LIBS})
 add_executable(mb-tests test/micro-benchmarks/main.cu
         test/micro-benchmarks/timed_kernel.cu test/micro-benchmarks/high_priority_copy.cu)
 target_link_libraries(mb-tests gtest pthread ${EXTRA_LIBS})
+
+add_executable(nvlink test/micro-benchmarks/nvlink.cu)
+target_link_libraries(nvlink ${EXTRA_LIBS})

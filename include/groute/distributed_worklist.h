@@ -29,7 +29,6 @@
 
 #ifndef __GROUTE_DISTRIBUTED_WORKLIST_H
 #define __GROUTE_DISTRIBUTED_WORKLIST_H
-
 #include <cuda_runtime.h>
 #include <gflags/gflags.h>
 #include <groute/context.h>
@@ -46,6 +45,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <vector>
 
 DECLARE_double(wl_alloc_factor_local);
@@ -298,7 +298,9 @@ class DistributedWorklistPeer
   std::vector<std::shared_ptr<Worklist<TRemote>>> m_split_wls;
   thrust::device_vector<dev::Worklist<TRemote>> m_dev_split_wls;
 
-  double stage1{}, stage2{}, stage3{};
+  double stage1{}, stage2{};
+  std::vector<double> copy_time;
+  std::vector<size_t> copy_size;
   uint32_t launch_times{};
 
   void SplitReceive(const groute::Segment<TRemote>& received_work,
@@ -534,24 +536,18 @@ class DistributedWorklistPeer
         sw.stop();
         stage2 += sw.ms();
 
-        sw.start();
-        std::vector<Event> events;
-
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
+          sw.start();
           auto seg = m_split_wls[seg_idx]->ToSeg(stream);
           seg.metadata = seg_idx;
           // Now send m_send_remote_output_worklist or
           // m_pass_remote_output_worklist along with out link
           auto ev = m_link_out.Send(seg, Event()).get();
-          events.template emplace_back(std::move(ev));
-        }
-
-        for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
-          auto& ev = events[seg_idx];
+          copy_size[seg_idx] += seg.GetSegmentSize();
           ev.Wait(stream.cuda_stream);
+          sw.stop();
+          copy_time[seg_idx] += sw.ms();
         }
-        sw.stop();
-        stage3 += sw.ms();
 #else
         //        sw.start();
         //        auto& wl = m_split_wls[0];
@@ -565,12 +561,14 @@ class DistributedWorklistPeer
         sw.start();
         auto ev = m_link_out.Send(output_seg, Event()).get();
         ev.Wait(stream.cuda_stream);
+        launch_times++;
         sw.stop();
         stage3 += sw.ms();
 #endif
         // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);
+        stream.Sync();
       }
     }
   }
@@ -591,8 +589,6 @@ class DistributedWorklistPeer
         m_link_in(router, dev, max_exch_size, exch_buffs),
         m_link_out(dev, router),
         m_numsplit(router.GetPolicy()->GetRouteNum()) {
-    m_numsplit = 8;
-
     void* mem_buffer;
     size_t mem_size;
 
@@ -630,14 +626,29 @@ class DistributedWorklistPeer
 
     m_receive_thread = std::thread([this]() { ReceiveLoop(); });
     m_send_thread = std::thread([this]() { SendLoop(); });
+    copy_time.resize(m_numsplit, 0);
+    copy_size.resize(m_numsplit, 0);
   }
 
   ~DistributedWorklistPeer() {
     m_receive_thread.join();
     m_send_thread.join();
-    std::cout << "Stage1: " << stage1 << " Stage2: " << stage2
-              << " Stage3: " << stage3 << " Launch Times: " << launch_times
-              << std::endl;
+
+    std::stringstream ss;
+
+    ss << "Stage1: " << stage1 << " Stage2: " << stage2
+       << " Copy Times: " << launch_times << std::endl;
+    for (int i = 0; i < copy_time.size(); i++) {
+      auto stage3 = copy_time[i];
+      auto size_in_bytes = (float) copy_size[i];
+      ss << "Ring " << i << " Size: " << size_in_bytes / 1024.0f / 1024 << " MB"
+         << " Copy time: " << stage3
+         << " Avg size: " << size_in_bytes / 1024.0f / 1024 / launch_times
+         << " MB"
+         << " Bandwidth: " << size_in_bytes * 1.0 / stage3 / 1000 << " MB/s"
+         << std::endl;
+    }
+    std::cout << ss.str();
   }
 
   CircularWorklist<TLocal>& GetLocalInputWorklist() override {

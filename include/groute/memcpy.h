@@ -44,6 +44,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace groute {
@@ -97,6 +98,13 @@ class MemcpyWork : public groute::internal::IWork {
 
   std::atomic<int>& active_count;
 
+  bool using_memcpy{};
+
+  std::map<int, std::set<int>> topology{{0, {1, 2, 3, 6}}, {1, {0, 2, 3, 7}},
+                                        {2, {0, 1, 3, 4}}, {3, {0, 1, 2, 5}},
+                                        {4, {2, 5, 6, 7}}, {5, {3, 4, 6, 7}},
+                                        {6, {0, 4, 5, 7}}, {7, {1, 4, 5, 6}}};
+
  private:
   EventPool& m_event_pool;
 
@@ -116,38 +124,37 @@ class MemcpyWork : public groute::internal::IWork {
     assert(copy_bytes <= dst_size);
   }
 
-  void CopyAsync(void* dst_buffer, const void* src_buffer, size_t count) const {
-    if (!Device::IsHost(src_dev_id) &&
-        !Device::IsHost(dst_dev_id))  // dev to dev
-    {
+  void CopyAsync(void* dst_buffer, const void* src_buffer, size_t count) {
+    if (!Device::IsHost(src_dev_id) && !Device::IsHost(dst_dev_id)) {
+      // dev to dev
       int access;
       GROUTE_CUDA_CHECK(
           cudaDeviceCanAccessPeer(&access, src_dev_id, dst_dev_id));
-      int prev_count = active_count.fetch_add(1);
 
-      if (access && prev_count > 1) {
-        copyp2p<<<1, 256, 0, copy_stream>>>(dst_buffer, src_buffer, count);
+      auto& dsts = topology.at(src_dev_id);
+      if (access && dsts.find(dst_dev_id) != dsts.end() && active_count == 0) {
+        dim3 bd(256, 1, 1);
+        dim3 gd(round_up(count, bd.x), 1, 1);
+
+        gd.x = std::max(gd.x, 2u);
+        copyp2p<<<gd, bd, 0, copy_stream>>>(dst_buffer, src_buffer, count);
       } else {
+        int prev_count = active_count.fetch_add(1);
+        using_memcpy = true;
         GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id,
                                               src_buffer, src_dev_id, count,
                                               copy_stream));
       }
-    }
-
-    else if (Device::IsHost(src_dev_id))  // host to dev
-    {
+    } else if (Device::IsHost(src_dev_id)) {
+      // host to dev
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
                                         cudaMemcpyHostToDevice, copy_stream));
-    }
-
-    else if (Device::IsHost(dst_dev_id))  // dev to host
-    {
+    } else if (Device::IsHost(dst_dev_id)) {
+      // dev to host
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
                                         cudaMemcpyDeviceToHost, copy_stream));
-    }
-
-    else  // host to host
-    {
+    } else {
+      // host to host
       assert(false);  // TODO: std::memcpy(dst_buffer, src_buffer, count);
     }
   }
@@ -155,7 +162,9 @@ class MemcpyWork : public groute::internal::IWork {
   void Complete(size_t bytes, const Event& ev) const {
     if (completion_callback)
       completion_callback(bytes, ev);
-    active_count.fetch_sub(1);
+    if (using_memcpy) {
+      active_count.fetch_sub(1);
+    }
   }
 
  public:

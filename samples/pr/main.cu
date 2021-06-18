@@ -48,8 +48,9 @@ struct App {
 
   static bool Single() { return TestPageRankSingle(); }
   static bool AsyncMulti(int G) {
-    return FLAGS_opt ? TestPageRankAsyncMultiOptimized(G)
-                     : TestPageRankAsyncMulti(G);
+    return TestPageRankAsyncMulti(G);
+//    return FLAGS_opt ? TestPageRankAsyncMultiOptimized(G)
+//                     : TestPageRankAsyncMulti(G);
   }
 
   static void Cleanup() { CleanupGraphs(); }

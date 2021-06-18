@@ -187,16 +187,16 @@ class Policy : public IPolicy {
     for (device_t i = 0; i < ndevs; i++) {
       topology[i] = {(i + 1) % ndevs};
     }
-    if(ndevs == 8) {
-      topology[0] = {3};
-      topology[1] = {7};
-      topology[2] = {1};
-      topology[3] = {2};
-      topology[4] = {5};
-      topology[5] = {6};
-      topology[6] = {0};
-      topology[7] = {4};
-    }
+    //    if (ndevs == 8) {
+    //      topology[0] = {3};
+    //      topology[1] = {7};
+    //      topology[2] = {1};
+    //      topology[3] = {2};
+    //      topology[4] = {5};
+    //      topology[5] = {6};
+    //      topology[6] = {0};
+    //      topology[7] = {4};
+    //    }
     // Instead of pushing to GPU 0, we push tasks to the first available device,
     // this is beneficial for the case where the first device is already
     // utilized with a prior task.
@@ -212,14 +212,12 @@ class Policy : public IPolicy {
       return CreateRingPolicy(ndevs);
     }
     std::vector<std::vector<int>> seqs;
-//    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});
-    //    seqs.push_back({0, 1, 7, 6, 4, 5, 3, 2});
-    seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6}); // lane * 2
+    //    seqs.push_back({0, 1, 2, 3, 4, 5, 6, 7});
 
-
-    //seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3}); // fastest
-//    seqs.push_back({0, 2, 3, 1, 7, 5, 4, 6});
-//    seqs.push_back({0, 1, 2, 3, 5, 6, 7, 4});
+    //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});
+    seqs.push_back({0, 1, 7, 6, 4, 5, 3, 2});
+    seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});  // lane * 2
+    //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});  // lane * 2
 
     std::vector<RoutingTable> tables;
 

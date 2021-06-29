@@ -292,6 +292,8 @@ class DistributedWorklistPeer
   // Exit:
   volatile bool m_exit = false;
 
+  int m_send_chunk_size;
+
   Link<TRemote> m_link_in, m_link_out;
 
   int m_numsplit;
@@ -399,7 +401,6 @@ class DistributedWorklistPeer
       auto seg = fut.get();
       if (seg.Empty())
         break;
-
       // queue a wait on stream
       seg.Wait(stream.cuda_stream);
 
@@ -511,7 +512,6 @@ class DistributedWorklistPeer
         break;
 
       source = 1 - source;
-
       // waiting for an even came from upstream
       work_ev.Wait(stream.cuda_stream);
       std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
@@ -520,14 +520,10 @@ class DistributedWorklistPeer
       for (auto output_seg : output_segs) {
         Stopwatch sw;
 #if 1
-        sw.start();
         for (int i = 0; i < m_numsplit; i++) {
           auto& wl = m_split_wls[i];
           wl->ResetAsync(stream.cuda_stream);
         }
-        stream.Sync();
-        sw.stop();
-        stage1 += sw.ms();
 
         sw.start();
         SplitSegment(stream, output_seg, m_split_wls);
@@ -536,18 +532,23 @@ class DistributedWorklistPeer
         sw.stop();
         stage2 += sw.ms();
 
+        std::vector<Segment<TRemote>> segs;
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
-          sw.start();
           auto seg = m_split_wls[seg_idx]->ToSeg(stream);
-          seg.metadata = seg_idx;
-          // Now send m_send_remote_output_worklist or
-          // m_pass_remote_output_worklist along with out link
-          auto ev = m_link_out.Send(seg, Event()).get();
-          copy_size[seg_idx] += seg.GetSegmentSize();
-          ev.Wait(stream.cuda_stream);
-          sw.stop();
-          copy_time[seg_idx] += sw.ms();
+
+          for (auto sub : seg.Split(m_send_chunk_size)) {
+            sub.metadata = seg_idx;
+            segs.push_back(sub);
+          }
         }
+
+          auto ev = m_link_out.Send(segs, Event()).get();
+          ev.Wait(stream.cuda_stream);
+
+//          copy_size[seg_idx] += seg.GetSegmentSize();
+
+//          sw.stop();
+//          copy_time[seg_idx] += sw.ms();
 #else
         //        sw.start();
         //        auto& wl = m_split_wls[0];
@@ -588,6 +589,7 @@ class DistributedWorklistPeer
         m_flags(flags),
         m_link_in(router, dev, max_exch_size, exch_buffs),
         m_link_out(dev, router),
+        m_send_chunk_size(max_work_size),
         m_numsplit(router.GetPolicy()->GetRouteNum()) {
     void* mem_buffer;
     size_t mem_size;

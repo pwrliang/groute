@@ -29,15 +29,19 @@
 
 #ifndef __GROUTE_POLICY_H
 #define __GROUTE_POLICY_H
-
 #include <groute/router.h>
 
+#include <algorithm>
 #include <functional>
 #include <future>
 #include <map>
 #include <memory>
 #include <set>
 #include <vector>
+
+#include "gflags/gflags.h"
+
+DEFINE_int32(nrings, 1, "Start with a specific number of GPUs");
 
 namespace groute {
 namespace router {
@@ -87,6 +91,8 @@ class Policy : public IPolicy {
     } else {
       topology = m_tables[message_metadata];
     }
+
+//    std::cout << "ring id: " << message_metadata << std::endl;
 
     assert(topology.find(src_dev) != topology.end());
 
@@ -212,12 +218,17 @@ class Policy : public IPolicy {
       return CreateRingPolicy(ndevs);
     }
     std::vector<std::vector<int>> seqs;
-    //    seqs.push_back({0, 1, 2, 3, 4, 5, 6, 7});
+    if (FLAGS_nrings >= 1) {
+      seqs.push_back({0, 2, 4, 6, 7, 5, 3, 1});
+    }
+    if (FLAGS_nrings >= 2) {
+      seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});  // lane * 2
+    }
+    if (FLAGS_nrings >= 3) {
+      seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});  // lane * 2
+    }
 
-    //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});
-    seqs.push_back({0, 1, 7, 6, 4, 5, 3, 2});
-    seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});  // lane * 2
-    //    seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});  // lane * 2
+    std::cout << "seqs " << seqs.size() << std::endl;
 
     std::vector<RoutingTable> tables;
 

@@ -48,6 +48,7 @@
 #include <memory>
 #include <set>
 #include <vector>
+#include <utils/stopwatch.h>
 
 namespace groute {
 
@@ -199,7 +200,7 @@ class Context {
     int stream_dev_id = m_dev_map.at(lane_identifier.first);
 
     auto copy = std::make_shared<groute::MemcpyWork>(
-        *m_event_pools[stream_dev_id], active_copies[src_dev], m_fragment_size);
+        *m_event_pools[stream_dev_id], active_copies[src_dev_id], m_fragment_size);
 
     copy->src_dev_id = src_dev_id;
     copy->src_buffer = src_buffer;

@@ -947,8 +947,6 @@ struct WLPool {
   std::mutex m_lock, m_destructo_lock;
 
   WLPool(uint32_t capacity, size_t numchunks) {
-    std::cout << capacity * sizeof(T) / 1024 / 1024 << " MB" << std::endl;
-
     for (int i = 0; i < numchunks; ++i) {
       m_buffers.push_back(std::make_shared<Worklist<T>>(capacity));
     }

@@ -264,7 +264,6 @@ struct SegmentPool {
   SegmentPool(const Context& ctx, device_t dev, int chunksize, int numchunks)
       : m_dev(dev), m_chunksize(chunksize) {
     ctx.SetDevice(dev);
-    std::cout << chunksize * sizeof(T) / 1024 / 1024 << " MB" << std::endl;
 
     for (int i = 0; i < numchunks; ++i) {
       T* buff;
@@ -282,7 +281,7 @@ struct SegmentPool {
     std::lock_guard<std::mutex> guard2(m_destructo_lock);
     std::lock_guard<std::mutex> guard(m_lock);
 
-    if (m_buffers_in_use.size() > 0) {
+    if (!m_buffers_in_use.empty()) {
       printf("ERROR: SOME (%llu) BUFFERS ARE STILL IN USE, NOT DEALLOCATING\n",
              m_buffers_in_use.size());
     }
@@ -420,12 +419,16 @@ class Router : public IRouter<T> {
 
     void QueueSendOp(const std::shared_ptr<SendOperation<T>>& send_op) {
       std::lock_guard<std::mutex> guard(m_mutex);
+      //      std::cout << m_send_queue.size() << " " << m_receive_queue.size()
+      //                << std::endl;
       m_send_queue.push_back(send_op);
     }
 
     void QueueReceiveOp(
         const std::shared_ptr<ReceiveOperation<T>>& receive_op) {
       std::lock_guard<std::mutex> guard(m_mutex);
+      //      std::cout << m_send_queue.size() << " " << m_receive_queue.size()
+      //      << std::endl;
       m_receive_queue.push_back(receive_op);
     }
 
@@ -597,6 +600,7 @@ class Router : public IRouter<T> {
         break;
 
       case Broadcast:
+        // This function is buggy
         aggregated_event->SetReportersCount(route.dst_devs.size());
         BroadcastMultiplexing(segment, route, ready_event, aggregated_event);
         break;
@@ -606,7 +610,6 @@ class Router : public IRouter<T> {
     }
 
     // TODO: Refactor Multiplexer object
-
     void AvailabilityMultiplexing(
         const Segment<T>& segment, const Route& route, const Event& ready_event,
         const std::shared_ptr<AggregatedEventPromise>& aggregated_event) {
@@ -651,15 +654,18 @@ class Router : public IRouter<T> {
     void BroadcastMultiplexing(
         const Segment<T>& segment, const Route& route, const Event& ready_event,
         const std::shared_ptr<AggregatedEventPromise>& aggregated_event) {
+      // create a send_op per receiver (broadcasting)
+      auto send_op = std::make_shared<SendOperation<T>>(aggregated_event, m_dev,
+                                                        segment, ready_event);
+
       for (auto dst_dev : route.dst_devs) {
-        // create a send_op per receiver (broadcasting)
-        auto send_op = std::make_shared<SendOperation<T>>(
-            aggregated_event, m_dev, segment, ready_event);
-
         m_router.m_receivers.at(dst_dev)->QueueSendOp(send_op);
+      }
 
-        while (m_router.m_receivers.at(dst_dev)->Assign())
+      for (auto dst_dev : route.dst_devs) {
+        while (m_router.m_receivers.at(dst_dev)->Assign()) {
           ;
+        }
       }
     }
   };
@@ -687,6 +693,15 @@ class Router : public IRouter<T> {
         m_possible_routes(policy->GetRoutingTable()) {
     // Create MemcpyInvokers or MemcpyWorkers between src and dst
     context.RequireMemcpyLanes(m_possible_routes);
+    std::cout << "Routing table: \n";
+    for (auto& kv : m_possible_routes) {
+      int src = kv.first;
+      std::cout << src << " ";
+      for (auto dst : kv.second) {
+        std::cout << " " << dst;
+      }
+      std::cout << std::endl;
+    }
 
     std::set<device_t> dst_devs;
 
@@ -698,6 +713,11 @@ class Router : public IRouter<T> {
       // add all dst devices to the set
       dst_devs.insert(std::begin(p.second), std::end(p.second));
     }
+    std::cout << "receivers: ";
+    for (auto dst : dst_devs) {
+      std::cout << dst;
+    }
+    std::cout << std::endl;
 
     // create a receiver for each dst device
     for (auto dst_dev : dst_devs) {

@@ -30,6 +30,10 @@
 #ifndef __GROUTE_COMMUNICATION_H
 #define __GROUTE_COMMUNICATION_H
 
+#include <cuda_runtime.h>
+#include <groute/context.h>
+
+#include <algorithm>
 #include <functional>
 #include <future>
 #include <map>
@@ -37,23 +41,20 @@
 #include <set>
 #include <vector>
 
-#include <cuda_runtime.h>
-
-#include <groute/context.h>
-
 namespace groute {
 namespace router {
 
 /**
  * @brief Represents a pending segment of valid data
  */
-template <typename T> class PendingSegment : public Segment<T> {
-private:
-  Event m_ready_event; // the event indicating data is valid
+template <typename T>
+class PendingSegment : public Segment<T> {
+ private:
+  Event m_ready_event;  // the event indicating data is valid
 
-public:
-  PendingSegment(T *segment_ptr, size_t total_size, size_t segment_size,
-                 size_t segment_offset, const Event &ready_event)
+ public:
+  PendingSegment(T* segment_ptr, size_t total_size, size_t segment_size,
+                 size_t segment_offset, const Event& ready_event)
       : Segment<T>(segment_ptr, total_size, segment_size, segment_offset),
         m_ready_event(ready_event) {}
 
@@ -73,31 +74,32 @@ public:
  * of data
  * @note The segment may get distributed to multiple consumers
  */
-template <typename T> struct ISender {
+template <typename T>
+struct ISender {
   virtual ~ISender() {}
 
   /// @brief Send a segment of data to any peer/s
-  virtual std::shared_future<Event> Send(const Segment<T> &segment,
-                                         const Event &ready_event) = 0;
-
+  virtual std::shared_future<Event> Send(const Segment<T>& segment,
+                                         const Event& ready_event) = 0;
   /// @brief Report no more segments from this sender
   virtual void Shutdown() = 0;
 
   /// @brief (for pipelined senders only)
   virtual Segment<T> GetSendBuffer() = 0;
-  virtual void ReleaseSendBuffer(const Segment<T> &segment,
-                                 const Event &ready_event) = 0;
+  virtual void ReleaseSendBuffer(const Segment<T>& segment,
+                                 const Event& ready_event) = 0;
 };
 
 /**
  * @brief A receiver for data segments
  */
-template <typename T> struct IReceiver {
+template <typename T>
+struct IReceiver {
   virtual ~IReceiver() {}
 
   /// @brief Receive a segment of data from peers into the provided buffer
-  virtual std::shared_future<PendingSegment<T>>
-  Receive(const Buffer<T> &dst_buffer, const Event &ready_event) = 0;
+  virtual std::shared_future<PendingSegment<T>> Receive(
+      const Buffer<T>& dst_buffer, const Event& ready_event) = 0;
 
   /// @brief Can this receiver still receive segments
   virtual bool Active() = 0;
@@ -106,7 +108,8 @@ template <typename T> struct IReceiver {
 /**
  * @brief A pipelined receiver which encapsulates memory buffer management
  */
-template <typename T> struct IPipelinedReceiver {
+template <typename T>
+struct IPipelinedReceiver {
   virtual ~IPipelinedReceiver() {}
 
   /// @brief Sync on all current memory operations in the pipeline
@@ -116,12 +119,12 @@ template <typename T> struct IPipelinedReceiver {
   virtual std::shared_future<PendingSegment<T>> Receive() = 0;
 
   /// @brief Release the segment buffer for reuse
-  virtual void ReleaseBuffer(const Segment<T> &segment,
-                             const Event &ready_event) = 0;
+  virtual void ReleaseBuffer(const Segment<T>& segment,
+                             const Event& ready_event) = 0;
 
   /// @brief Receive a segment of data from peers into the provided buffer
-  virtual std::shared_future<PendingSegment<T>>
-  Receive(const Buffer<T> &dst_buffer, const Event &ready_event) = 0;
+  virtual std::shared_future<PendingSegment<T>> Receive(
+      const Buffer<T>& dst_buffer, const Event& ready_event) = 0;
 
   /// @brief Can this receiver still receive segments
   virtual bool Active() = 0;
@@ -130,36 +133,40 @@ template <typename T> struct IPipelinedReceiver {
 /**
  * @brief Pipelined receiver implementation
  */
-template <typename T> class PipelinedReceiver : public IPipelinedReceiver<T> {
-private:
-  IReceiver<T> *m_receiver;
+template <typename T>
+class PipelinedReceiver : public IPipelinedReceiver<T> {
+ private:
+  IReceiver<T>* m_receiver;
   size_t m_chunk_size;
-  std::vector<T *> m_dev_buffers;
+  std::vector<T*> m_dev_buffers;
   std::deque<std::shared_future<PendingSegment<T>>> m_promised_segments;
   device_t m_dev;
-  groute::Context &m_ctx;
+  groute::Context& m_ctx;
 
-public:
-  PipelinedReceiver(groute::Context &context, IReceiver<T> *receiver,
+ public:
+  PipelinedReceiver(groute::Context& context, IReceiver<T>* receiver,
                     device_t dev, size_t chunk_size, size_t num_buffers = 2)
-      : m_receiver(receiver), m_chunk_size(chunk_size),
-        m_dev_buffers(num_buffers), m_dev(dev), m_ctx(context) {
+      : m_receiver(receiver),
+        m_chunk_size(chunk_size),
+        m_dev_buffers(num_buffers),
+        m_dev(dev),
+        m_ctx(context) {
     context.SetDevice(dev);
 
-    if (!m_receiver->Active()) // inactive receiver, no need for buffers
+    if (!m_receiver->Active())  // inactive receiver, no need for buffers
     {
       m_chunk_size = 0;
       m_dev_buffers.clear();
     }
 
     for (size_t i = 0; i < m_dev_buffers.size(); ++i) {
-      T *buffer;
+      T* buffer;
       if (dev != Device::Host) {
         GROUTE_CUDA_CHECK(
-            cudaMalloc((void **)&buffer, m_chunk_size * sizeof(T)));
+            cudaMalloc((void**) &buffer, m_chunk_size * sizeof(T)));
       } else {
         GROUTE_CUDA_CHECK(
-            cudaMallocHost((void **)&buffer, m_chunk_size * sizeof(T)));
+            cudaMallocHost((void**) &buffer, m_chunk_size * sizeof(T)));
       }
       m_dev_buffers[i] = buffer;
     }
@@ -183,7 +190,7 @@ public:
   }
 
   void Sync() const override {
-    for (auto &pseg : m_promised_segments) {
+    for (auto& pseg : m_promised_segments) {
       pseg.get().Sync();
     }
   }
@@ -193,8 +200,8 @@ public:
       if (!m_receiver->Active()) {
         return groute::completed_future(PendingSegment<T>());
       }
-      throw std::exception(); // m_promised_segments is empty (usage: Start ->
-                              // Receive -> Release)
+      throw std::exception();  // m_promised_segments is empty (usage: Start ->
+                               // Receive -> Release)
     }
 
     auto pseg = m_promised_segments.front();
@@ -203,26 +210,26 @@ public:
   }
 
   // return pending segment to m_promised_segments
-  void ReleaseBuffer(const Segment<T> &segment,
-                     const Event &ready_event) override {
-    T *buffer = segment.GetSegmentPtr();
+  void ReleaseBuffer(const Segment<T>& segment,
+                     const Event& ready_event) override {
+    T* buffer = segment.GetSegmentPtr();
 #ifndef NDEBUG
     if (std::find(m_dev_buffers.begin(), m_dev_buffers.end(), buffer) ==
         m_dev_buffers.end())
-      throw std::exception(); // unrecognized buffer
+      throw std::exception();  // unrecognized buffer
 #endif
     m_promised_segments.push_back(
         m_receiver->Receive(Buffer<T>(buffer, m_chunk_size), ready_event));
   }
 
-  std::shared_future<PendingSegment<T>>
-  Receive(const Buffer<T> &dst_buffer, const Event &ready_event) override {
+  std::shared_future<PendingSegment<T>> Receive(
+      const Buffer<T>& dst_buffer, const Event& ready_event) override {
     return m_receiver->Receive(dst_buffer, ready_event);
   }
 
   bool Active() override { return m_receiver->Active(); }
 };
-} // namespace router
-} // namespace groute
+}  // namespace router
+}  // namespace groute
 
-#endif // __GROUTE_COMMUNICATION_H
+#endif  // __GROUTE_COMMUNICATION_H

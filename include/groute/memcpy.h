@@ -36,6 +36,7 @@
 #include <groute/internal/cuda_utils.h>
 #include <groute/internal/pinned_allocation.h>
 #include <groute/internal/worker.h>
+#include <utils/stopwatch.h>
 
 #include <cassert>
 #include <functional>
@@ -46,7 +47,8 @@
 #include <memory>
 #include <set>
 #include <vector>
-
+#define BATCHED_D2D_CAPACITY 160
+#define BATCHED_D2D_PADDING 16
 namespace groute {
 
 typedef std::function<void(size_t, const Event&)> MemcpyCallback;
@@ -54,12 +56,13 @@ typedef std::function<void(size_t, const Event&)> MemcpyCallback;
 __global__ static void copyp2p(void* dest, const void* src, size_t size) {
   size_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
   size_t gridSize = blockDim.x * gridDim.x;
-  auto unit_size = sizeof(int4);
+  using type = char;
+  auto unit_size = sizeof(type);
   auto num_elems = size / unit_size;
   auto rest_bytes = size % unit_size;
 
-  auto* dest_4 = (int4*) dest;
-  auto* src_4 = (const int4*) src;
+  auto* dest_4 = (type*) dest;
+  auto* src_4 = (const type*) src;
 
 #pragma unroll
   for (size_t i = globalId; i < num_elems; i += gridSize) {
@@ -131,20 +134,47 @@ class MemcpyWork : public groute::internal::IWork {
       GROUTE_CUDA_CHECK(
           cudaDeviceCanAccessPeer(&access, src_dev_id, dst_dev_id));
 
+      int curr;
+      GROUTE_CUDA_CHECK(cudaGetDevice(&curr));
+
       auto& dsts = topology.at(src_dev_id);
-      if (access && dsts.find(dst_dev_id) != dsts.end() && active_count == 0) {
+      Stopwatch sw;
+
+      sw.start();
+      int prev_count = active_count.fetch_add(1);
+
+      if (access && dsts.find(dst_dev_id) != dsts.end() && false) {
         dim3 bd(256, 1, 1);
         dim3 gd(round_up(count, bd.x), 1, 1);
 
-        gd.x = std::max(gd.x, 2u);
-        copyp2p<<<gd, bd, 0, copy_stream>>>(dst_buffer, src_buffer, count);
+        gd.x = std::min(gd.x, 768u);
+
+        int blockSize = 0;
+        int numBlocks = 0;
+
+        cudaOccupancyMaxPotentialBlockSize(&numBlocks, &blockSize, copyp2p);
+        copyp2p<<<numBlocks, blockSize, 0, copy_stream>>>(dst_buffer,
+                                                          src_buffer, count);
       } else {
-        int prev_count = active_count.fetch_add(1);
-        using_memcpy = true;
         GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id,
                                               src_buffer, src_dev_id, count,
                                               copy_stream));
       }
+      std::cout << "active num: " << prev_count << " " << src_dev_id << "->"
+                << dst_dev_id << " Stream: " << copy_stream << std::endl;
+      //      if (prev_count > 0) {
+      //        std::cout << prev_count << std::endl;
+      //      }
+      //      GROUTE_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+      //      sw.stop();
+      //
+      //      int size_in_mb = count / 1024 / 1024;
+      //      int bw = size_in_mb / (sw.ms() / 1000);
+      //      if (size_in_mb > 2 && bw > 0 && bw < 10000) {
+      //        std::cout << src_dev_id << "->" << dst_dev_id << " Bandwidth: "
+      //        << bw
+      //                  << std::endl;
+      //      }
     } else if (Device::IsHost(src_dev_id)) {
       // host to dev
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
@@ -162,9 +192,7 @@ class MemcpyWork : public groute::internal::IWork {
   void Complete(size_t bytes, const Event& ev) const {
     if (completion_callback)
       completion_callback(bytes, ev);
-    if (using_memcpy) {
-      active_count.fetch_sub(1);
-    }
+    active_count.fetch_sub(1);
   }
 
  public:
@@ -236,21 +264,34 @@ struct IMemcpyInvoker {
 class MemcpyInvoker : public IMemcpyInvoker {
  protected:
   const int m_dev_id;  // the real dev id
-  cudaStream_t m_copy_stream;
-  cudaEvent_t m_sync_event;
+  std::vector<cudaStream_t> m_copy_streams;
+  std::vector<cudaEvent_t> m_sync_events;
 
  public:
   MemcpyInvoker(int dev_id) : m_dev_id(dev_id) {
     GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
-    GROUTE_CUDA_CHECK(
-        cudaStreamCreateWithFlags(&m_copy_stream, cudaStreamNonBlocking));
-    GROUTE_CUDA_CHECK(
-        cudaEventCreateWithFlags(&m_sync_event, cudaEventDisableTiming));
+    int n_gpus;
+    GROUTE_CUDA_CHECK(cudaGetDeviceCount(&n_gpus));
+
+    for (int i = 0; i < n_gpus; i++) {
+      cudaStream_t stream;
+      GROUTE_CUDA_CHECK(
+          cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+      m_copy_streams.push_back(stream);
+      cudaEvent_t event;
+      GROUTE_CUDA_CHECK(
+          cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+      m_sync_events.push_back(event);
+    }
   }
 
   virtual ~MemcpyInvoker() {
-    GROUTE_CUDA_CHECK(cudaStreamDestroy(m_copy_stream));
-    GROUTE_CUDA_CHECK(cudaEventDestroy(m_sync_event));
+    for (auto& stream : m_copy_streams) {
+      GROUTE_CUDA_CHECK(cudaStreamDestroy(stream));
+    }
+    for (auto& event : m_sync_events) {
+      GROUTE_CUDA_CHECK(cudaEventDestroy(event));
+    }
   }
 
   void InvokeCopyAsync(std::shared_ptr<MemcpyWork> memcpy_work) override {
@@ -263,8 +304,10 @@ class MemcpyInvoker : public IMemcpyInvoker {
     if (current_dev != m_dev_id)
       GROUTE_CUDA_CHECK(cudaSetDevice(m_dev_id));
 
-    memcpy_work->copy_stream = m_copy_stream;
-    memcpy_work->sync_event = m_sync_event;
+    int dst_dev_id = memcpy_work->dst_dev_id;
+
+    memcpy_work->copy_stream = m_copy_streams[dst_dev_id];
+    memcpy_work->sync_event = m_sync_events[dst_dev_id];
 
     (*memcpy_work)(nullptr);  // invoke
 

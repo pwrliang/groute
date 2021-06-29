@@ -31,30 +31,29 @@
 #define __GROUTE_FUSED_DISTRIBUTED_WORKLIST_H
 
 #include <cuda_runtime.h>
+#include <gflags/gflags_declare.h>
+#include <groute/context.h>
+#include <groute/event_pool.h>
+#include <groute/groute.h>
+#include <groute/worklist.h>
+
 #include <initializer_list>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
 
-#include <gflags/gflags_declare.h>
-
-#include <groute/context.h>
-#include <groute/event_pool.h>
-#include <groute/groute.h>
-#include <groute/worklist.h>
-
 DECLARE_bool(verbose);
 DECLARE_bool(count_work);
 
-inline int WaitForSignal(volatile int *signal) {
+inline int WaitForSignal(volatile int* signal) {
   while (!*signal) {
     std::this_thread::yield();
   }
   return *signal;
 }
 
-__device__ __forceinline__ void SignalHostFlag(volatile int *pSignal,
+__device__ __forceinline__ void SignalHostFlag(volatile int* pSignal,
                                                int value) {
   if (TID_1D == 0) {
     __threadfence_system();
@@ -62,7 +61,7 @@ __device__ __forceinline__ void SignalHostFlag(volatile int *pSignal,
   }
 }
 
-__device__ __forceinline__ void IncreaseHostFlag(volatile int *signal_ptr,
+__device__ __forceinline__ void IncreaseHostFlag(volatile int* signal_ptr,
                                                  int value) {
   // if (TID_1D == 0)
   {
@@ -76,7 +75,7 @@ namespace opt {
 
 enum Signal {
   SIGNAL_EXIT = -1,
-  SIGNAL_DATA = 1, // NOTE: One or more
+  SIGNAL_DATA = 1,  // NOTE: One or more
 };
 
 /*
@@ -102,7 +101,7 @@ TUnpacked unpack(const TPacked& data);
 */
 
 template <typename TLocal, typename TRemote, typename SplitOps>
-__global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
+__global__ void SplitSendKernel(SplitOps split_ops, TLocal* work_ptr,
                                 uint32_t work_size,
                                 dev::CircularWorklist<TLocal> local_work,
                                 dev::CircularWorklist<TRemote> remote_work) {
@@ -114,19 +113,19 @@ __global__ void SplitSendKernel(SplitOps split_ops, TLocal *work_ptr,
     // no filter counter here
 
     if (flags & SF_Take) {
-      local_work.prepend_warp(work); // notice the prepend
+      local_work.prepend_warp(work);  // notice the prepend
     }
 
     if (flags & SF_Pass) {
       // pack data
       TRemote packed = split_ops.pack(work);
-      remote_work.append_warp(packed); // notice the append
+      remote_work.append_warp(packed);  // notice the append
     }
   }
 }
 
 template <typename TLocal, typename TRemote, typename SplitOps>
-__global__ void SplitReceiveKernel(SplitOps split_ops, TRemote *work_ptr,
+__global__ void SplitReceiveKernel(SplitOps split_ops, TRemote* work_ptr,
                                    uint32_t work_size,
                                    dev::CircularWorklist<TLocal> local_work,
                                    dev::CircularWorklist<TRemote> remote_work,
@@ -181,10 +180,10 @@ struct IDistributedWorklist {
   virtual ~IDistributedWorklist() {}
 
   virtual void ReportHighPrioWork(int new_work, int performed_work,
-                                  const char *caller, device_t dev,
+                                  const char* caller, device_t dev,
                                   bool initial = false) = 0;
   virtual void ReportLowPrioWork(int new_work, int performed_work,
-                                 const char *caller, device_t dev) = 0;
+                                 const char* caller, device_t dev) = 0;
 
   virtual int GetCurrentPrio() = 0;
 
@@ -194,49 +193,50 @@ struct IDistributedWorklist {
   virtual bool HasActivePeers() = 0;
 };
 
-template <typename TLocal, typename TRemote> struct IDistributedWorklistPeer {
+template <typename TLocal, typename TRemote>
+struct IDistributedWorklistPeer {
   virtual ~IDistributedWorklistPeer() {}
 
   virtual int GetLastSendSignal() = 0;
 
   /// The LocalInputWorklist, exposed for customized usage
-  virtual CircularWorklist<TLocal> &GetLocalInputWorklist() = 0;
+  virtual CircularWorklist<TLocal>& GetLocalInputWorklist() = 0;
 
   /// The RemoteOutputWorklist, exposed for customized usage
-  virtual CircularWorklist<TRemote> &GetRemoteOutputWorklist() = 0;
+  virtual CircularWorklist<TRemote>& GetRemoteOutputWorklist() = 0;
 
   /// A blocking call for local work segments
-  virtual std::vector<Segment<TLocal>> GetLocalWork(Stream &stream) = 0;
+  virtual std::vector<Segment<TLocal>> GetLocalWork(Stream& stream) = 0;
 
   virtual std::vector<Segment<TLocal>> WaitForPrioOrWork(int current_prio,
-                                                         Stream &stream) = 0;
+                                                         Stream& stream) = 0;
 
   /// A non-blocking call for local work segments
-  virtual std::vector<Segment<TLocal>> PeekLocalWork(Stream &stream) = 0;
+  virtual std::vector<Segment<TLocal>> PeekLocalWork(Stream& stream) = 0;
 
-  virtual volatile int *GetSendSignalPtr() = 0;
+  virtual volatile int* GetSendSignalPtr() = 0;
 };
 
 template <typename TLocal, typename TRemote, typename SplitOps>
 class DistributedWorklistPeer
     : public IDistributedWorklistPeer<TLocal, TRemote> {
-protected:
+ protected:
   int m_dev, m_ngpus;
 
-private:
-  Context &m_context;
-  IDistributedWorklist &m_distributed_worklist;
+ private:
+  Context& m_context;
+  IDistributedWorklist& m_distributed_worklist;
 
   SplitOps m_split_ops;
   DistributedWorklistFlags m_flags;
   Counter m_filter_counter;
 
-  CircularWorklist<TLocal> m_remote_input_worklist; // From split-receive
+  CircularWorklist<TLocal> m_remote_input_worklist;  // From split-receive
 
   CircularWorklist<TRemote>
-      m_send_remote_output_worklist, // From local work (split-send)
-      m_pass_remote_output_worklist; // From previous device on the ring
-                                     // (split-receive), passing on
+      m_send_remote_output_worklist,  // From local work (split-send)
+      m_pass_remote_output_worklist;  // From previous device on the ring
+                                      // (split-receive), passing on
 
   std::thread m_receive_thread;
   std::thread m_send_thread;
@@ -249,10 +249,10 @@ private:
   bool m_receive_work = false;
   Event m_receive_work_event;
 
-  volatile int *m_signals[2];
+  volatile int* m_signals[2];
   enum {
-    SEND_SIGNAL = 0, // Signal from worker
-    PASS_SIGNAL      // Signal from SplitReceive
+    SEND_SIGNAL = 0,  // Signal from worker
+    PASS_SIGNAL       // Signal from SplitReceive
   };
 
   volatile int m_last_processed_send_signal;
@@ -263,8 +263,8 @@ private:
 
   Link<TRemote> m_link_in, m_link_out;
 
-  void SplitReceive(const groute::Segment<TRemote> &received_work,
-                    groute::Stream &stream) {
+  void SplitReceive(const groute::Segment<TRemote>& received_work,
+                    groute::Stream& stream) {
     m_filter_counter.ResetAsync(stream.cuda_stream);
 
     dim3 block_dims(DBS, 1, 1);
@@ -283,32 +283,32 @@ private:
       int take_counter = m_remote_input_worklist.GetAllocCountAndSync(stream);
       int pass_counter =
           m_pass_remote_output_worklist.GetAllocCountAndSync(stream);
-      int filtered_work = (int)m_filter_counter.GetCount(stream);
+      int filtered_work = (int) m_filter_counter.GetCount(stream);
 
       printf("%d - split-rcv, take: %d, filter: %d, pass: %d\n", m_dev,
              take_counter, filtered_work, pass_counter);
 
       m_distributed_worklist.ReportHighPrioWork(
           0,
-          filtered_work, // all sent work is reported as high, so we report
-                         // filtering as high
+          filtered_work,  // all sent work is reported as high, so we report
+                          // filtering as high
           "SplitReceive", m_dev);
     } else {
       m_remote_input_worklist.SyncAppendAllocAsync(stream.cuda_stream);
       m_pass_remote_output_worklist.SyncAppendAllocAsync(stream.cuda_stream);
 
-      int filtered_work = (int)m_filter_counter.GetCount(stream);
+      int filtered_work = (int) m_filter_counter.GetCount(stream);
 
       m_distributed_worklist.ReportHighPrioWork(
           0,
-          filtered_work, // all sent work is reported as high, so we report
-                         // filtering as high
+          filtered_work,  // all sent work is reported as high, so we report
+                          // filtering as high
           "SplitReceive", m_dev);
     }
   }
 
-  void SplitSend(const groute::Segment<TLocal> &sent_work,
-                 groute::Stream &stream) {
+  void SplitSend(const groute::Segment<TLocal>& sent_work,
+                 groute::Stream& stream) {
     dim3 block_dims(DBS, 1, 1);
     dim3 grid_dims(round_up(sent_work.GetSegmentSize(), block_dims.x), 1, 1);
 
@@ -379,11 +379,11 @@ private:
     int prev_pass_signal = 0, prev_send_signal = 0;
 
     while (true) {
-      CircularWorklist<TRemote> *worklist;
+      CircularWorklist<TRemote>* worklist;
 
       int pass_signal = *m_signals[PASS_SIGNAL];
       int send_signal = *m_signals[SEND_SIGNAL];
-
+      // Waiting for a change of signals
       while (pass_signal == prev_pass_signal &&
              send_signal == prev_send_signal) {
         std::this_thread::yield();
@@ -399,51 +399,51 @@ private:
                send_signal);
 
       if (signal_source == PASS_SIGNAL) {
-        if (pass_signal != prev_pass_signal) // test pass first
+        if (pass_signal != prev_pass_signal)  // test pass first
         {
           if (pass_signal == SIGNAL_EXIT)
             break;
 
-          prev_pass_signal = pass_signal; // update
+          prev_pass_signal = pass_signal;  // update
           worklist = &m_pass_remote_output_worklist;
         } else if (send_signal != prev_send_signal) {
           int data_to_send = send_signal - prev_send_signal;
           m_distributed_worklist.ReportHighPrioWork(data_to_send, 0,
                                                     "SplitSend", m_dev);
 
-          prev_send_signal = send_signal; // update
+          prev_send_signal = send_signal;  // update
           m_last_processed_send_signal = send_signal;
           worklist = &m_send_remote_output_worklist;
         }
 
         else
-          continue; // error
+          continue;  // error
       } else {
-        if (send_signal != prev_send_signal) // test send first
+        if (send_signal != prev_send_signal)  // test send first
         {
           int data_to_send = send_signal - prev_send_signal;
           m_distributed_worklist.ReportHighPrioWork(data_to_send, 0,
                                                     "SplitSend2", m_dev);
 
-          prev_send_signal = send_signal; // update
+          prev_send_signal = send_signal;  // update
           m_last_processed_send_signal = send_signal;
           worklist = &m_send_remote_output_worklist;
         } else if (pass_signal != prev_pass_signal) {
           if (pass_signal == SIGNAL_EXIT)
             break;
 
-          prev_pass_signal = pass_signal; // update
+          prev_pass_signal = pass_signal;  // update
           worklist = &m_pass_remote_output_worklist;
         }
 
         else
-          continue; // error
+          continue;  // error
       }
 
       if (m_exit)
         break;
 
-      signal_source = 1 - signal_source; // alternate
+      signal_source = 1 - signal_source;  // alternate
 
       std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
 
@@ -459,37 +459,41 @@ private:
     }
   }
 
-public:
-  DistributedWorklistPeer(Context &context, router::IRouter<TRemote> &router,
-                          IDistributedWorklist &distributed_worklist,
-                          int current_priority, const SplitOps &split_ops,
+ public:
+  DistributedWorklistPeer(Context& context, router::IRouter<TRemote>& router,
+                          IDistributedWorklist& distributed_worklist,
+                          int current_priority, const SplitOps& split_ops,
                           DistributedWorklistFlags flags, device_t dev,
                           int ngpus, size_t max_work_size, size_t max_exch_size,
                           size_t exch_buffs)
-      : m_context(context), m_dev(dev), m_ngpus(ngpus),
+      : m_context(context),
+        m_dev(dev),
+        m_ngpus(ngpus),
         m_distributed_worklist(distributed_worklist),
-        m_current_priority(current_priority), m_split_ops(split_ops),
-        m_flags(flags), m_link_in(router, dev, max_exch_size, exch_buffs),
+        m_current_priority(current_priority),
+        m_split_ops(split_ops),
+        m_flags(flags),
+        m_link_in(router, dev, max_exch_size, exch_buffs),
         m_link_out(dev, router) {
-    void *mem_buffer;
+    void* mem_buffer;
     size_t mem_size;
 
     mem_buffer = context.Alloc(0.3, mem_size, AF_PO2);
     m_remote_input_worklist = groute::CircularWorklist<TLocal>(
-        (TLocal *)mem_buffer, mem_size / sizeof(TLocal));
+        (TLocal*) mem_buffer, mem_size / sizeof(TLocal));
 
     mem_buffer = context.Alloc(0.15, mem_size, AF_PO2);
     m_send_remote_output_worklist = groute::CircularWorklist<TRemote>(
-        (TRemote *)mem_buffer, mem_size / sizeof(TRemote));
+        (TRemote*) mem_buffer, mem_size / sizeof(TRemote));
 
     mem_buffer = context.Alloc(0.15, mem_size, AF_PO2);
     m_pass_remote_output_worklist = groute::CircularWorklist<TRemote>(
-        (TRemote *)mem_buffer, mem_size / sizeof(TRemote));
+        (TRemote*) mem_buffer, mem_size / sizeof(TRemote));
 
-    m_remote_input_worklist.ResetAsync((cudaStream_t)0);
+    m_remote_input_worklist.ResetAsync((cudaStream_t) 0);
 
-    m_send_remote_output_worklist.ResetAsync((cudaStream_t)0);
-    m_pass_remote_output_worklist.ResetAsync((cudaStream_t)0);
+    m_send_remote_output_worklist.ResetAsync((cudaStream_t) 0);
+    m_pass_remote_output_worklist.ResetAsync((cudaStream_t) 0);
 
     GROUTE_CUDA_CHECK(cudaMallocHost(&m_signals[SEND_SIGNAL], sizeof(int)));
     GROUTE_CUDA_CHECK(cudaMallocHost(&m_signals[PASS_SIGNAL], sizeof(int)));
@@ -498,29 +502,29 @@ public:
     *m_signals[PASS_SIGNAL] = 0;
     m_last_processed_send_signal = 0;
 
-    GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)0)); // just in case
+    GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t) 0));  // just in case
 
     m_receive_thread = std::thread([this]() { ReceiveLoop(); });
     m_send_thread = std::thread([this]() { SendLoop(); });
   }
 
   ~DistributedWorklistPeer() {
-    GROUTE_CUDA_CHECK(cudaFreeHost((void *)m_signals[SEND_SIGNAL]));
-    GROUTE_CUDA_CHECK(cudaFreeHost((void *)m_signals[PASS_SIGNAL]));
+    GROUTE_CUDA_CHECK(cudaFreeHost((void*) m_signals[SEND_SIGNAL]));
+    GROUTE_CUDA_CHECK(cudaFreeHost((void*) m_signals[PASS_SIGNAL]));
 
     m_receive_thread.join();
     m_send_thread.join();
   }
 
-  CircularWorklist<TLocal> &GetLocalInputWorklist() override {
+  CircularWorklist<TLocal>& GetLocalInputWorklist() override {
     return m_remote_input_worklist;
   }
 
-  CircularWorklist<TRemote> &GetRemoteOutputWorklist() override {
+  CircularWorklist<TRemote>& GetRemoteOutputWorklist() override {
     return m_send_remote_output_worklist;
   }
 
-  std::vector<Segment<TLocal>> GetLocalWork(Stream &stream) override {
+  std::vector<Segment<TLocal>> GetLocalWork(Stream& stream) override {
     auto segs = m_remote_input_worklist.ToSegs(stream);
 
     while (segs.empty()) {
@@ -554,7 +558,7 @@ public:
   }
 
   std::vector<Segment<TLocal>> WaitForPrioOrWork(int current_prio,
-                                                 Stream &stream) override {
+                                                 Stream& stream) override {
     auto segs = m_remote_input_worklist.ToSegs(stream);
 
     while (segs.empty()) {
@@ -591,11 +595,11 @@ public:
     return segs;
   }
 
-  std::vector<Segment<TLocal>> PeekLocalWork(Stream &stream) override {
+  std::vector<Segment<TLocal>> PeekLocalWork(Stream& stream) override {
     return m_remote_input_worklist.ToSegs(stream);
   }
 
-  volatile int *GetSendSignalPtr() override { return m_signals[SEND_SIGNAL]; }
+  volatile int* GetSendSignalPtr() override { return m_signals[SEND_SIGNAL]; }
 
   // private:
   void AdvanceLowPrio(int current_priority) {
@@ -610,11 +614,11 @@ public:
 
 template <typename TLocal, typename TRemote, typename SplitOps>
 class DistributedWorklist : public IDistributedWorklist {
-private:
+ private:
   typedef DistributedWorklistPeer<TLocal, TRemote, SplitOps> PeerType;
 
-  Context &m_context;
-  router::IRouter<TRemote> &m_router;
+  Context& m_context;
+  router::IRouter<TRemote>& m_router;
   int m_ngpus;
 
   std::vector<std::shared_ptr<PeerType>> m_peers;
@@ -631,18 +635,23 @@ private:
   std::atomic<unsigned int> m_reported_work;
   std::vector<unsigned int> m_ctr;
 
-public:
+ public:
   unsigned int GetCurrentWorkCount(device_t dev) { return m_ctr[dev + 1]; }
 
-public:
+ public:
   std::mutex log_gate;
 
-public:
-  DistributedWorklist(Context &context, router::IRouter<TRemote> &router,
+ public:
+  DistributedWorklist(Context& context, router::IRouter<TRemote>& router,
                       int ngpus, int priority_delta)
-      : m_context(context), m_router(router), m_ngpus(ngpus),
-        m_active_peers_counter(ngpus), m_high_prio_work(0), m_low_prio_work(0),
-        m_priority_delta(priority_delta), m_current_priority(priority_delta),
+      : m_context(context),
+        m_router(router),
+        m_ngpus(ngpus),
+        m_active_peers_counter(ngpus),
+        m_high_prio_work(0),
+        m_low_prio_work(0),
+        m_priority_delta(priority_delta),
+        m_current_priority(priority_delta),
         m_reported_work(0) {
     if (FLAGS_count_work) {
       m_ctr.resize(ngpus + 1, 0);
@@ -660,26 +669,26 @@ public:
   }
 
   std::shared_ptr<IDistributedWorklistPeer<TLocal, TRemote>> CreatePeer(
-      device_t dev, const SplitOps &split_ops, size_t max_work_size,
+      device_t dev, const SplitOps& split_ops, size_t max_work_size,
       size_t max_exch_size, size_t exch_buffs,
       DistributedWorklistFlags flags =
-          (DistributedWorklistFlags)(DW_WarpAppend | DW_HighPriorityReceive)) {
+          (DistributedWorklistFlags) (DW_WarpAppend | DW_HighPriorityReceive)) {
     m_context.SetDevice(dev);
     auto peer = std::make_shared<PeerType>(
-        m_context, m_router, *this, (int)m_current_priority, split_ops, flags,
+        m_context, m_router, *this, (int) m_current_priority, split_ops, flags,
         dev, m_ngpus, max_work_size, max_exch_size, exch_buffs);
     m_peers.push_back(peer);
     return peer;
   }
 
-  void ReportPeerTermination() override // currently unused
+  void ReportPeerTermination() override  // currently unused
   {
     if (--m_active_peers_counter == 0) {
       m_router.Shutdown();
     }
   }
 
-  void ReportHighPrioWork(int new_work, int performed_work, const char *caller,
+  void ReportHighPrioWork(int new_work, int performed_work, const char* caller,
                           device_t dev, bool initialwork = false) override {
     int work = new_work - performed_work;
 
@@ -706,18 +715,18 @@ public:
       }
 
       else {
-        m_high_prio_work = (int)m_low_prio_work;
+        m_high_prio_work = (int) m_low_prio_work;
         m_low_prio_work = 0;
 
         m_current_priority += m_priority_delta;
-        for (auto &peer : m_peers) {
+        for (auto& peer : m_peers) {
           peer->AdvanceLowPrio(m_current_priority);
         }
       }
     }
   }
 
-  void ReportLowPrioWork(int new_work, int performed_work, const char *caller,
+  void ReportLowPrioWork(int new_work, int performed_work, const char* caller,
                          device_t dev) override {
     int work = new_work - performed_work;
 
@@ -750,7 +759,7 @@ public:
 
   bool HasActivePeers() override { return m_active_peers_counter > 0; }
 };
-} // namespace opt
-} // namespace groute
+}  // namespace opt
+}  // namespace groute
 
-#endif // __GROUTE_FUSED_DISTRIBUTED_WORKLIST_H
+#endif  // __GROUTE_FUSED_DISTRIBUTED_WORKLIST_H

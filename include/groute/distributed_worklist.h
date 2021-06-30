@@ -519,7 +519,6 @@ class DistributedWorklistPeer
       // We may split a Segment by key into pieces
       for (auto output_seg : output_segs) {
         Stopwatch sw;
-#if 1
         for (int i = 0; i < m_numsplit; i++) {
           auto& wl = m_split_wls[i];
           wl->ResetAsync(stream.cuda_stream);
@@ -532,40 +531,54 @@ class DistributedWorklistPeer
         sw.stop();
         stage2 += sw.ms();
 
-        std::vector<Segment<TRemote>> segs;
-        for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
-          auto seg = m_split_wls[seg_idx]->ToSeg(stream);
+        std::vector<std::shared_future<Event>> submitted;
+        std::vector<uint32_t> pos_vec(m_numsplit, 0);
+        std::map<int, uint32_t> seg_len;
+        auto rest_seg = m_numsplit;
 
-          for (auto sub : seg.Split(m_send_chunk_size)) {
-            sub.metadata = seg_idx;
-            segs.push_back(sub);
+        for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
+          auto len = m_split_wls[seg_idx]->GetLength(stream);
+          if (len > 0) {
+            seg_len[seg_idx] = len;
           }
         }
 
-          auto ev = m_link_out.Send(segs, Event()).get();
+        int seg_idx = 0;
+
+        while (!seg_len.empty()) {
+          auto len_it = seg_len.find(seg_idx);
+
+          if (len_it != seg_len.end()) {
+            uint32_t len = len_it->second;
+            uint32_t& pos = pos_vec[seg_idx];
+
+            if (pos < len) {
+              uint32_t size = std::min((uint32_t) m_send_chunk_size, len - pos);
+              Segment<TRemote> partial_seg(
+                  m_split_wls[seg_idx]->GetDataPtr() + pos, size);
+
+              partial_seg.metadata = seg_idx;
+              submitted.push_back(m_link_out.Send(partial_seg, Event()));
+
+              pos += m_send_chunk_size;
+              if (pos >= len) {
+                seg_len.erase(len_it);
+              }
+            }
+          }
+          seg_idx = (seg_idx + 1) % m_numsplit;
+        }
+
+        for (auto& ft : submitted) {
+          // N.B. future will be fulfill only after copy is done
+          auto& ev = ft.get();
           ev.Wait(stream.cuda_stream);
+        }
 
-//          copy_size[seg_idx] += seg.GetSegmentSize();
+        //          copy_size[seg_idx] += seg.GetSegmentSize();
 
-//          sw.stop();
-//          copy_time[seg_idx] += sw.ms();
-#else
-        //        sw.start();
-        //        auto& wl = m_split_wls[0];
-        //        wl->ResetAsync(stream.cuda_stream);
-        //        SplitSegment(stream, output_seg, m_dev_split_wls);
-        //        output_seg = wl->ToSeg(stream);
-        //        stream.Sync();
-        //        sw.stop();
-        //        stage2 += sw.ms();
-
-        sw.start();
-        auto ev = m_link_out.Send(output_seg, Event()).get();
-        ev.Wait(stream.cuda_stream);
-        launch_times++;
-        sw.stop();
-        stage3 += sw.ms();
-#endif
+        //          sw.stop();
+        //          copy_time[seg_idx] += sw.ms();
         // Commit consumed items
         worklist->PopItemsAsync(output_seg.GetSegmentSize(),
                                 stream.cuda_stream);

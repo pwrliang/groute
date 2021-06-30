@@ -53,31 +53,6 @@ namespace groute {
 
 typedef std::function<void(size_t, const Event&)> MemcpyCallback;
 
-__global__ static void copyp2p(void* dest, const void* src, size_t size) {
-  size_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t gridSize = blockDim.x * gridDim.x;
-  using type = char;
-  auto unit_size = sizeof(type);
-  auto num_elems = size / unit_size;
-  auto rest_bytes = size % unit_size;
-
-  auto* dest_4 = (type*) dest;
-  auto* src_4 = (const type*) src;
-
-#pragma unroll
-  for (size_t i = globalId; i < num_elems; i += gridSize) {
-    dest_4[i] = src_4[i];
-  }
-
-  auto* dest_c = (char*) dest + size - rest_bytes;
-  auto* src_c = (const char*) src + size - rest_bytes;
-
-#pragma unroll
-  for (size_t i = globalId; i < rest_bytes; i += gridSize) {
-    dest_c[i] = src_c[i];
-  }
-}
-
 class MemcpyWork : public groute::internal::IWork {
  public:
   int src_dev_id;
@@ -101,13 +76,6 @@ class MemcpyWork : public groute::internal::IWork {
 
   std::atomic<int>& active_count;
 
-  bool using_memcpy{};
-
-  std::map<int, std::set<int>> topology{{0, {1, 2, 3, 6}}, {1, {0, 2, 3, 7}},
-                                        {2, {0, 1, 3, 4}}, {3, {0, 1, 2, 5}},
-                                        {4, {2, 5, 6, 7}}, {5, {3, 4, 6, 7}},
-                                        {6, {0, 4, 5, 7}}, {7, {1, 4, 5, 6}}};
-
  private:
   EventPool& m_event_pool;
 
@@ -130,38 +98,17 @@ class MemcpyWork : public groute::internal::IWork {
   void CopyAsync(void* dst_buffer, const void* src_buffer, size_t count) {
     if (!Device::IsHost(src_dev_id) && !Device::IsHost(dst_dev_id)) {
       // dev to dev
-      int access;
-      GROUTE_CUDA_CHECK(
-          cudaDeviceCanAccessPeer(&access, src_dev_id, dst_dev_id));
-
-      int curr;
-      GROUTE_CUDA_CHECK(cudaGetDevice(&curr));
-
-      auto& dsts = topology.at(src_dev_id);
       Stopwatch sw;
 
       sw.start();
       int prev_count = active_count.fetch_add(1);
 
-      if (access && dsts.find(dst_dev_id) != dsts.end() && false) {
-        dim3 bd(256, 1, 1);
-        dim3 gd(round_up(count, bd.x), 1, 1);
-
-        gd.x = std::min(gd.x, 768u);
-
-        int blockSize = 0;
-        int numBlocks = 0;
-
-        cudaOccupancyMaxPotentialBlockSize(&numBlocks, &blockSize, copyp2p);
-        copyp2p<<<numBlocks, blockSize, 0, copy_stream>>>(dst_buffer,
-                                                          src_buffer, count);
-      } else {
-        GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id,
-                                              src_buffer, src_dev_id, count,
-                                              copy_stream));
-      }
-      std::cout << "active num: " << prev_count << " " << src_dev_id << "->"
-                << dst_dev_id << " Stream: " << copy_stream << std::endl;
+      GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id, src_buffer,
+                                            src_dev_id, count, copy_stream));
+      //      std::cout << "active num: " << prev_count << " " << src_dev_id <<
+      //      "->"
+      //                << dst_dev_id << " Stream: " << copy_stream <<
+      //                std::endl;
       //      if (prev_count > 0) {
       //        std::cout << prev_count << std::endl;
       //      }
@@ -220,7 +167,6 @@ class MemcpyWork : public groute::internal::IWork {
 #ifndef NDEBUG
     CheckParams();
 #endif
-
     src_ready_event.Wait(copy_stream);
     dst_ready_event.Wait(copy_stream);
 

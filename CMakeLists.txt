@@ -88,7 +88,7 @@ target_link_libraries(bfs ${EXTRA_LIBS})
 
 add_executable(sssp src/utils/parser.cu src/utils/utils.cu src/groute/graphs/csr_graph.cu
         samples/sssp/sssp_async.cu
-        samples/sssp/sssp_async_opt.cu
+#        samples/sssp/sssp_async_opt.cu
         samples/sssp/sssp_host.cu
         samples/sssp/main.cu)
 target_link_libraries(sssp ${EXTRA_LIBS})

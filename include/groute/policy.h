@@ -92,7 +92,7 @@ class Policy : public IPolicy {
       topology = m_tables[message_metadata];
     }
 
-//    std::cout << "ring id: " << message_metadata << std::endl;
+    //    std::cout << "ring id: " << message_metadata << std::endl;
 
     assert(topology.find(src_dev) != topology.end());
 
@@ -217,16 +217,16 @@ class Policy : public IPolicy {
     if (ndevs != 8) {
       return CreateRingPolicy(ndevs);
     }
-    std::vector<std::vector<int>> seqs;
-    if (FLAGS_nrings >= 1) {
-      seqs.push_back({0, 2, 4, 6, 7, 5, 3, 1});
+    std::vector<std::vector<int>> seqs{
+        {0, 2, 4, 6, 7, 5, 3, 1}, {0, 1, 3, 5, 7, 6, 4, 2},
+        {0, 3, 2, 1, 7, 4, 5, 6}, {0, 6, 5, 4, 7, 1, 2, 3},
+        {0, 6, 5, 4, 7, 1, 2, 3}, {0, 3, 2, 1, 7, 4, 5, 6}};
+
+    if(FLAGS_nrings > seqs.size()) {
+      std::cerr << "Too many rings" << std::endl;
+      std::exit(1);
     }
-    if (FLAGS_nrings >= 2) {
-      seqs.push_back({0, 3, 2, 1, 7, 4, 5, 6});  // lane * 2
-    }
-    if (FLAGS_nrings >= 3) {
-      seqs.push_back({0, 6, 5, 4, 7, 1, 2, 3});  // lane * 2
-    }
+    seqs.resize(FLAGS_nrings);
 
     std::cout << "seqs " << seqs.size() << std::endl;
 

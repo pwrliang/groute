@@ -548,9 +548,6 @@ class Worklist {
 
  private:
   void Alloc() {
-    if (m_capacity == 0)
-      return;
-
     if (m_mem_owner)
       GROUTE_CUDA_CHECK(cudaMalloc(&m_data, sizeof(T) * m_capacity));
     GROUTE_CUDA_CHECK(
@@ -559,9 +556,6 @@ class Worklist {
   }
 
   void Free() {
-    if (m_capacity == 0)
-      return;
-
     if (m_mem_owner)
       GROUTE_CUDA_CHECK(cudaFree(m_data));
     GROUTE_CUDA_CHECK(cudaFree(m_counters));
@@ -607,6 +601,21 @@ class Worklist {
 
   Segment<T> ToSeg(const Stream& stream) const {
     return Segment<T>(GetDataPtr(), GetLength(stream));
+  }
+
+  void SetData(const Stream& stream, Segment<T> seg) {
+    if (m_mem_owner)
+      GROUTE_CUDA_CHECK(cudaFree(m_data));
+    m_data = seg.GetSegmentPtr();
+    m_capacity = seg.GetSegmentSize();
+    *m_host_count = seg.GetSegmentSize();
+
+    m_current_slot = (m_current_slot + 1) % m_counter_count;
+    assert(m_current_slot >= 0 && m_current_slot < m_counter_count);
+
+    GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_counters + m_current_slot, m_host_count,
+                                      sizeof(uint32_t), cudaMemcpyHostToDevice,
+                                      stream.cuda_stream));
   }
 };
 

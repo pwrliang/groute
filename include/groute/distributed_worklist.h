@@ -195,26 +195,66 @@ struct IDistributedWorklist {
 };
 
 template <typename T>
-void SplitSegment(groute::Stream& stream, Segment<T>& segment,
+void SplitSegment(groute::Stream& stream, std::shared_ptr<Worklist<T>> input_wl,
+                  size_t num_split,
                   std::vector<std::shared_ptr<Worklist<T>>>& wl) {
-  size_t seg_size = segment.GetSegmentSize();
-  T* data = segment.GetSegmentPtr();
-  size_t num_split = wl.size();
+  auto rest_wl = wl[num_split];
+  Segment<T> input_seg = input_wl->ToSeg(stream);
 
   for (int idx = 0; idx < num_split; idx++) {
-    dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
+    auto* data = input_seg.GetSegmentPtr();
+    auto seg_size = input_seg.GetSegmentSize();
+
+    rest_wl->ResetAsync(stream.cuda_stream);
+    wl[idx]->ResetAsync(stream.cuda_stream);
+
+    dev::Worklist<T> d_rest_wl = rest_wl->DeviceObject();
+    dev::Worklist<T> d_dst_wl = wl[idx]->DeviceObject();
 
     LaunchKernel(stream, seg_size, [=] __device__() {
       auto tid = TID_1D;
       auto nthreads = TOTAL_THREADS_1D;
 
       for (int i = 0 + tid; i < seg_size; i += nthreads) {
-        if (idx == data[i] % num_split) {
-          d_dev_wl.append_warp(data[i]);
+        auto& work = data[i];
+        bool add_to_dst = idx == work % num_split;
+        int add_to_dst_mask = __ballot_sync(__activemask(), add_to_dst ? 1 : 0);
+        int add_to_remain_mask =
+            __ballot_sync(__activemask(), !add_to_dst ? 1 : 0);
+
+        if (add_to_dst) {
+          int leader = __ffs(add_to_dst_mask) - 1;
+          int thread_offset = __popc(add_to_dst_mask & ((1 << lane_id()) - 1));
+          d_dst_wl.append_warp(work, leader, __popc(add_to_dst_mask),
+                               thread_offset);
+        } else {
+          int leader = __ffs(add_to_remain_mask) - 1;
+          int thread_offset =
+              __popc(add_to_remain_mask & ((1 << lane_id()) - 1));
+          d_rest_wl.append_warp(work, leader, __popc(add_to_remain_mask),
+                                thread_offset);
         }
       }
     });
+
+    input_seg = rest_wl->ToSeg(stream);
+    std::swap(input_wl, rest_wl);
   }
+
+  //  for (int idx = 0; idx < num_split; idx++) {
+  //    dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
+  //
+  //    LaunchKernel(stream, seg_size, [=] __device__() {
+  //      auto tid = TID_1D;
+  //      auto nthreads = TOTAL_THREADS_1D;
+  //
+  //      for (int i = 0 + tid; i < seg_size; i += nthreads) {
+  //        if (idx == data[i] % num_split) {
+  //          d_dev_wl.append_warp(data[i]);
+  //        }
+  //      }
+  //    });
+  //  }
 }
 
 template <typename TLocal, typename TRemote>
@@ -299,11 +339,12 @@ class DistributedWorklistPeer
   int m_numsplit;
   std::vector<std::shared_ptr<Worklist<TRemote>>> m_split_wls;
   thrust::device_vector<dev::Worklist<TRemote>> m_dev_split_wls;
+  std::shared_ptr<Worklist<TRemote>> m_empty_wl;
 
-  double stage1{}, stage2{};
-  std::vector<double> copy_time;
-  std::vector<size_t> copy_size;
-  uint32_t launch_times{};
+  double m_time_split{};
+  double m_time_send{};
+  uint32_t m_send_times{};
+  std::vector<uint32_t> m_size_send, m_seg_count;
 
   void SplitReceive(const groute::Segment<TRemote>& received_work,
                     groute::CircularWorklist<TLocal>& local_work,
@@ -517,29 +558,37 @@ class DistributedWorklistPeer
       std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
 
       // We may split a Segment by key into pieces
-      for (auto output_seg : output_segs) {
+      for (Segment<TRemote> output_seg : output_segs) {
         Stopwatch sw;
-        for (int i = 0; i < m_numsplit; i++) {
-          auto& wl = m_split_wls[i];
-          wl->ResetAsync(stream.cuda_stream);
-        }
 
         sw.start();
-        SplitSegment(stream, output_seg, m_split_wls);
-        launch_times++;
+        m_empty_wl->SetData(stream, output_seg);
+        SplitSegment(stream, m_empty_wl, m_numsplit, m_split_wls);
+        m_send_times++;
         stream.Sync();
         sw.stop();
-        stage2 += sw.ms();
+        m_time_split += sw.ms();
 
         std::vector<std::shared_future<Event>> submitted;
         std::vector<uint32_t> pos_vec(m_numsplit, 0);
         std::map<int, uint32_t> seg_len;
         auto rest_seg = m_numsplit;
+        size_t total_sent_size = 0;
 
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
           auto len = m_split_wls[seg_idx]->GetLength(stream);
           if (len > 0) {
             seg_len[seg_idx] = len;
+            total_sent_size += len;
+            /*
+            auto partial_seg = m_split_wls[seg_idx]->ToSeg(stream);
+
+            partial_seg.metadata = seg_idx;
+            submitted.push_back(m_link_out.Send(partial_seg, Event()));
+             */
+            // statistics
+            //            m_size_send[seg_idx] += partial_seg.GetSegmentSize();
+            //            m_seg_count[seg_idx]++;
           }
         }
 
@@ -560,6 +609,10 @@ class DistributedWorklistPeer
               partial_seg.metadata = seg_idx;
               submitted.push_back(m_link_out.Send(partial_seg, Event()));
 
+              // statistics
+              m_size_send[seg_idx] += partial_seg.GetSegmentSize();
+              m_seg_count[seg_idx]++;
+
               pos += m_send_chunk_size;
               if (pos >= len) {
                 seg_len.erase(len_it);
@@ -569,14 +622,26 @@ class DistributedWorklistPeer
           seg_idx = (seg_idx + 1) % m_numsplit;
         }
 
+        sw.start();
         for (auto& ft : submitted) {
           // N.B. future will be fulfill only after copy is done
           auto& ev = ft.get();
           ev.Wait(stream.cuda_stream);
         }
+        stream.Sync();
+        sw.stop();
+        total_sent_size = total_sent_size / 1024.0f / 1024.0;
 
+        if (total_sent_size > 2) {
+          auto bandwidth = total_sent_size / (sw.ms() / 1000);
+
+          //          std::cout << "Dev: " << m_dev << " size: " <<
+          //          total_sent_size
+          //                    << " bandwidth: " << bandwidth << " MB/s" <<
+          //                    std::endl;
+        }
+        m_time_send += sw.ms();
         //          copy_size[seg_idx] += seg.GetSegmentSize();
-
         //          sw.stop();
         //          copy_time[seg_idx] += sw.ms();
         // Commit consumed items
@@ -629,20 +694,27 @@ class DistributedWorklistPeer
     m_send_remote_output_worklist.ResetAsync((cudaStream_t) 0);
     m_pass_remote_output_worklist.ResetAsync((cudaStream_t) 0);
 
-    for (int i = 0; i < m_numsplit; i++) {
-      auto wl = std::make_shared<Worklist<TRemote>>(
-          m_send_remote_output_worklist.capacity() / m_numsplit / 1.5, 1);
+    auto split_wl_cap = std::max(m_send_remote_output_worklist.capacity(),
+                                 m_pass_remote_output_worklist.capacity()) /
+                        m_numsplit / 1.5;
+
+    for (int i = 0; i <= m_numsplit; i++) {
+      mem_buffer = m_context.Alloc(split_wl_cap);
+      auto wl = std::make_shared<Worklist<TRemote>>((TRemote*) mem_buffer,
+                                                    split_wl_cap);
       wl->ResetAsync((cudaStream_t) 0);
       m_split_wls.push_back(wl);
       m_dev_split_wls.push_back(wl->DeviceObject());
     }
 
+    m_empty_wl = std::make_shared<Worklist<TRemote>>(nullptr, 0);
+
     GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t) 0));  // just in case
 
     m_receive_thread = std::thread([this]() { ReceiveLoop(); });
     m_send_thread = std::thread([this]() { SendLoop(); });
-    copy_time.resize(m_numsplit, 0);
-    copy_size.resize(m_numsplit, 0);
+    m_size_send.resize(m_numsplit, 0);
+    m_seg_count.resize(m_numsplit, 0);
   }
 
   ~DistributedWorklistPeer() {
@@ -651,17 +723,15 @@ class DistributedWorklistPeer
 
     std::stringstream ss;
 
-    ss << "Stage1: " << stage1 << " Stage2: " << stage2
-       << " Copy Times: " << launch_times << std::endl;
-    for (int i = 0; i < copy_time.size(); i++) {
-      auto stage3 = copy_time[i];
-      auto size_in_bytes = (float) copy_size[i];
-      ss << "Ring " << i << " Size: " << size_in_bytes / 1024.0f / 1024 << " MB"
-         << " Copy time: " << stage3
-         << " Avg size: " << size_in_bytes / 1024.0f / 1024 / launch_times
-         << " MB"
-         << " Bandwidth: " << size_in_bytes * 1.0 / stage3 / 1000 << " MB/s"
-         << std::endl;
+    ss << "Dev " << m_dev << " SendOP enqueue times: " << m_send_times
+       << " send time: " << m_time_send << " split time: " << m_time_split
+       << std::endl;
+
+    for (int i = 0; i < m_numsplit; i++) {
+      auto size_in_mb = m_size_send[i] / 1024.0f / 1024;
+      ss << "    Ring " << i << " Size: " << size_in_mb << " MB"
+         << " Seg count: " << m_seg_count[i]
+         << " Avg size: " << size_in_mb / m_seg_count[i] << " MB" << std::endl;
     }
     std::cout << ss.str();
   }

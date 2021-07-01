@@ -47,8 +47,7 @@
 #include <memory>
 #include <set>
 #include <vector>
-#define BATCHED_D2D_CAPACITY 160
-#define BATCHED_D2D_PADDING 16
+
 namespace groute {
 
 typedef std::function<void(size_t, const Event&)> MemcpyCallback;
@@ -74,8 +73,6 @@ class MemcpyWork : public groute::internal::IWork {
 
   MemcpyCallback completion_callback;
 
-  std::atomic<int>& active_count;
-
  private:
   EventPool& m_event_pool;
 
@@ -98,30 +95,8 @@ class MemcpyWork : public groute::internal::IWork {
   void CopyAsync(void* dst_buffer, const void* src_buffer, size_t count) {
     if (!Device::IsHost(src_dev_id) && !Device::IsHost(dst_dev_id)) {
       // dev to dev
-      Stopwatch sw;
-
-      sw.start();
-      int prev_count = active_count.fetch_add(1);
-
       GROUTE_CUDA_CHECK(cudaMemcpyPeerAsync(dst_buffer, dst_dev_id, src_buffer,
                                             src_dev_id, count, copy_stream));
-      //      std::cout << "active num: " << prev_count << " " << src_dev_id <<
-      //      "->"
-      //                << dst_dev_id << " Stream: " << copy_stream <<
-      //                std::endl;
-      //      if (prev_count > 0) {
-      //        std::cout << prev_count << std::endl;
-      //      }
-      //      GROUTE_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
-      //      sw.stop();
-      //
-      //      int size_in_mb = count / 1024 / 1024;
-      //      int bw = size_in_mb / (sw.ms() / 1000);
-      //      if (size_in_mb > 2 && bw > 0 && bw < 10000) {
-      //        std::cout << src_dev_id << "->" << dst_dev_id << " Bandwidth: "
-      //        << bw
-      //                  << std::endl;
-      //      }
     } else if (Device::IsHost(src_dev_id)) {
       // host to dev
       GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_buffer, src_buffer, count,
@@ -139,11 +114,10 @@ class MemcpyWork : public groute::internal::IWork {
   void Complete(size_t bytes, const Event& ev) const {
     if (completion_callback)
       completion_callback(bytes, ev);
-    active_count.fetch_sub(1);
   }
 
  public:
-  MemcpyWork(EventPool& event_pool, std::atomic<int>& atomic,
+  MemcpyWork(EventPool& event_pool,
              int fragment_size = -1)
       : m_event_pool(event_pool),
         src_dev_id(Device::Null),
@@ -155,8 +129,7 @@ class MemcpyWork : public groute::internal::IWork {
         dst_buffer(nullptr),
         copy_stream(nullptr),
         sync_event(nullptr),
-        completion_callback(nullptr),
-        active_count(atomic) {
+        completion_callback(nullptr) {
 #ifndef NDEBUG
     if (fragment_size < -1 || fragment_size == 0)
       throw std::invalid_argument("invalid value for fragment_size");

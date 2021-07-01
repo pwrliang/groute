@@ -39,6 +39,7 @@
 #include <groute/internal/worker.h>
 #include <groute/memcpy.h>
 #include <groute/memory_pool.h>
+#include <utils/stopwatch.h>
 
 #include <cassert>
 #include <functional>
@@ -48,9 +49,13 @@
 #include <memory>
 #include <set>
 #include <vector>
-#include <utils/stopwatch.h>
 
 namespace groute {
+
+struct CopyStatistics {
+  size_t size;
+  size_t count;
+};
 
 /*
  * @brief The global groute context
@@ -71,7 +76,7 @@ class Context {
 
   std::map<int, std::unique_ptr<MemoryPool>> m_memory_pools;
 
-  std::map<int, std::atomic<int>> active_copies;
+  std::map<std::pair<int, int>, CopyStatistics> m_copy_size;
 
  public:
   void RequireMemcpyLane(int src_dev, int dst_dev) {
@@ -117,10 +122,6 @@ class Context {
       for (int physical_dev_j : m_physical_devs)
         if (physical_dev_i != physical_dev_j)
           cudaDeviceEnablePeerAccess(physical_dev_j, 0);
-    }
-
-    for (int physical_dev : m_physical_devs) {
-      active_copies[physical_dev] = 0;
     }
   }
 
@@ -186,6 +187,18 @@ class Context {
     InitMemoryPools();
   }
 
+  ~Context() {
+    std::cout << "Communication statistics: " << std::endl;
+    for (auto& kv_size : m_copy_size) {
+      auto stat = kv_size.second;
+      std::cout << kv_size.first.first << "->" << kv_size.first.second
+                << " size: " << stat.size / 1024.0f / 1024 << " MB"
+                << " count: " << stat.count
+                << " avg size: " << stat.size / 1024.0f / 1024 / stat.count
+                << " MB" << std::endl;
+    }
+  }
+
   std::shared_ptr<groute::MemcpyWork> QueueMemcpyWork(
       int src_dev, void* src_buffer, int dst_dev, void* dst_buffer,
       size_t count, const Event& src_ready_event, const Event& dst_ready_event,
@@ -195,12 +208,15 @@ class Context {
     int src_dev_id = m_dev_map.at(src_dev);
     int dst_dev_id = m_dev_map.at(dst_dev);
 
+    m_copy_size[std::make_pair(src_dev_id, dst_dev_id)].size += count;
+    m_copy_size[std::make_pair(src_dev_id, dst_dev_id)].count++;
+
     // resolve the correct device associated with the copy stream of this lane
     // we need this in order to provide the correct event pool
     int stream_dev_id = m_dev_map.at(lane_identifier.first);
 
     auto copy = std::make_shared<groute::MemcpyWork>(
-        *m_event_pools[stream_dev_id], active_copies[src_dev_id], m_fragment_size);
+        *m_event_pools[stream_dev_id], m_fragment_size);
 
     copy->src_dev_id = src_dev_id;
     copy->src_buffer = src_buffer;

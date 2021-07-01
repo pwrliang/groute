@@ -173,9 +173,9 @@ public:
     // Align to 512 bytes
     size = (size / 512) * 512;
 
-    std::cout << "Alloc " << size / 1024 / 1024 << " MB "
-              << " Rest " << (m_size - m_offset) / 1024 / 1024 << " MB"
-              << std::endl;
+//    std::cout << "Alloc " << size / 1024 / 1024 << " MB "
+//              << " Rest " << (m_size - m_offset) / 1024 / 1024 << " MB"
+//              << std::endl;
     m_offset += size;
 
     return (void *)((char *)m_mem + offset);

@@ -240,21 +240,31 @@ void SplitSegment(groute::Stream& stream, std::shared_ptr<Worklist<T>> input_wl,
     input_seg = rest_wl->ToSeg(stream);
     std::swap(input_wl, rest_wl);
   }
+}
 
-  //  for (int idx = 0; idx < num_split; idx++) {
-  //    dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
-  //
-  //    LaunchKernel(stream, seg_size, [=] __device__() {
-  //      auto tid = TID_1D;
-  //      auto nthreads = TOTAL_THREADS_1D;
-  //
-  //      for (int i = 0 + tid; i < seg_size; i += nthreads) {
-  //        if (idx == data[i] % num_split) {
-  //          d_dev_wl.append_warp(data[i]);
-  //        }
-  //      }
-  //    });
-  //  }
+template <typename T>
+void SplitSegment(groute::Stream& stream, Segment<T>& input_seg,
+                  size_t num_split,
+                  std::vector<std::shared_ptr<Worklist<T>>>& wl) {
+  auto seg_size = input_seg.GetSegmentSize();
+  auto* data = input_seg.GetSegmentPtr();
+
+  for (int idx = 0; idx < num_split; idx++) {
+    wl[idx]->ResetAsync(stream.cuda_stream);
+
+    dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
+
+    LaunchKernel(stream, seg_size, [=] __device__() {
+      auto tid = TID_1D;
+      auto nthreads = TOTAL_THREADS_1D;
+
+      for (int i = tid; i < seg_size; i += nthreads) {
+        if (idx == data[i] % num_split) {
+          d_dev_wl.append_warp(data[i]);
+        }
+      }
+    });
+  }
 }
 
 template <typename TLocal, typename TRemote>
@@ -562,8 +572,8 @@ class DistributedWorklistPeer
         Stopwatch sw;
 
         sw.start();
-        m_empty_wl->SetData(stream, output_seg);
-        SplitSegment(stream, m_empty_wl, m_numsplit, m_split_wls);
+        //        m_empty_wl->SetData(stream, output_seg);
+        SplitSegment(stream, output_seg, m_numsplit, m_split_wls);
         m_send_times++;
         stream.Sync();
         sw.stop();
@@ -696,7 +706,7 @@ class DistributedWorklistPeer
 
     auto split_wl_cap = std::max(m_send_remote_output_worklist.capacity(),
                                  m_pass_remote_output_worklist.capacity()) /
-                        m_numsplit / 1.5;
+                        m_numsplit;
 
     for (int i = 0; i <= m_numsplit; i++) {
       mem_buffer = m_context.Alloc(split_wl_cap);

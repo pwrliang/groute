@@ -354,7 +354,7 @@ class DistributedWorklistPeer
   double m_time_split{};
   double m_time_send{};
   uint32_t m_send_times{};
-  std::vector<uint32_t> m_size_send, m_seg_count;
+  std::vector<size_t> m_size_send, m_seg_count;
 
   void SplitReceive(const groute::Segment<TRemote>& received_work,
                     groute::CircularWorklist<TLocal>& local_work,
@@ -580,57 +580,57 @@ class DistributedWorklistPeer
         m_time_split += sw.ms();
 
         std::vector<std::shared_future<Event>> submitted;
-        std::vector<uint32_t> pos_vec(m_numsplit, 0);
-        std::map<int, uint32_t> seg_len;
+        //        std::vector<uint32_t> pos_vec(m_numsplit, 0);
+        //        std::map<int, uint32_t> seg_len;
         auto rest_seg = m_numsplit;
         size_t total_sent_size = 0;
 
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
           auto len = m_split_wls[seg_idx]->GetLength(stream);
           if (len > 0) {
-            seg_len[seg_idx] = len;
-            total_sent_size += len;
-            /*
+            //            seg_len[seg_idx] = len;
+            total_sent_size += len * sizeof(TRemote);
             auto partial_seg = m_split_wls[seg_idx]->ToSeg(stream);
 
             partial_seg.metadata = seg_idx;
             submitted.push_back(m_link_out.Send(partial_seg, Event()));
-             */
             // statistics
-            //            m_size_send[seg_idx] += partial_seg.GetSegmentSize();
-            //            m_seg_count[seg_idx]++;
+            m_size_send[seg_idx] +=
+                partial_seg.GetSegmentSize() * sizeof(TRemote);
+            m_seg_count[seg_idx]++;
           }
         }
 
-        int seg_idx = 0;
-
-        while (!seg_len.empty()) {
-          auto len_it = seg_len.find(seg_idx);
-
-          if (len_it != seg_len.end()) {
-            uint32_t len = len_it->second;
-            uint32_t& pos = pos_vec[seg_idx];
-
-            if (pos < len) {
-              uint32_t size = std::min((uint32_t) m_send_chunk_size, len - pos);
-              Segment<TRemote> partial_seg(
-                  m_split_wls[seg_idx]->GetDataPtr() + pos, size);
-
-              partial_seg.metadata = seg_idx;
-              submitted.push_back(m_link_out.Send(partial_seg, Event()));
-
-              // statistics
-              m_size_send[seg_idx] += partial_seg.GetSegmentSize();
-              m_seg_count[seg_idx]++;
-
-              pos += m_send_chunk_size;
-              if (pos >= len) {
-                seg_len.erase(len_it);
-              }
-            }
-          }
-          seg_idx = (seg_idx + 1) % m_numsplit;
-        }
+        //        int seg_idx = 0;
+        //
+        //        while (!seg_len.empty()) {
+        //          auto len_it = seg_len.find(seg_idx);
+        //
+        //          if (len_it != seg_len.end()) {
+        //            uint32_t len = len_it->second;
+        //            uint32_t& pos = pos_vec[seg_idx];
+        //
+        //            if (pos < len) {
+        //              uint32_t size = std::min((uint32_t) m_send_chunk_size,
+        //              len - pos); Segment<TRemote> partial_seg(
+        //                  m_split_wls[seg_idx]->GetDataPtr() + pos, size);
+        //
+        //              partial_seg.metadata = seg_idx;
+        //              submitted.push_back(m_link_out.Send(partial_seg,
+        //              Event()));
+        //
+        //              // statistics
+        //              m_size_send[seg_idx] += partial_seg.GetSegmentSize();
+        //              m_seg_count[seg_idx]++;
+        //
+        //              pos += m_send_chunk_size;
+        //              if (pos >= len) {
+        //                seg_len.erase(len_it);
+        //              }
+        //            }
+        //          }
+        //          seg_idx = (seg_idx + 1) % m_numsplit;
+        //        }
 
         sw.start();
         for (auto& ft : submitted) {
@@ -645,10 +645,10 @@ class DistributedWorklistPeer
         if (total_sent_size > 2) {
           auto bandwidth = total_sent_size / (sw.ms() / 1000);
 
-          //          std::cout << "Dev: " << m_dev << " size: " <<
-          //          total_sent_size
-          //                    << " bandwidth: " << bandwidth << " MB/s" <<
-          //                    std::endl;
+          //                    std::cout << "Dev: " << m_dev << " size: " <<
+          //                    total_sent_size
+          //                              << " bandwidth: " << bandwidth << "
+          //                              MB/s" << std::endl;
         }
         m_time_send += sw.ms();
         //          copy_size[seg_idx] += seg.GetSegmentSize();
@@ -738,7 +738,7 @@ class DistributedWorklistPeer
        << std::endl;
 
     for (int i = 0; i < m_numsplit; i++) {
-      auto size_in_mb = m_size_send[i] / 1024.0f / 1024;
+      auto size_in_mb = m_size_send[i] / 1024.0 / 1024;
       ss << "    Ring " << i << " Size: " << size_in_mb << " MB"
          << " Seg count: " << m_seg_count[i]
          << " Avg size: " << size_in_mb / m_seg_count[i] << " MB" << std::endl;

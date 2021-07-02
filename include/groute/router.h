@@ -155,7 +155,7 @@ class SendOperation {
   SendOperation(std::shared_ptr<AggregatedEventPromise> aggregated_event,
                 device_t src_dev, const Segment<T>& src_segment,
                 const Event& src_ready_event)
-      : m_aggregated_event(aggregated_event),
+      : m_aggregated_event(std::move(aggregated_event)),
         m_src_dev(src_dev),
         m_src_segment(src_segment),
         m_src_ready_event(src_ready_event),
@@ -189,7 +189,8 @@ class SendOperation {
     return m_src_segment.GetSubSegment(ss_pos, ss_size);
   }
 
-  bool AssignReceiveOperation(std::shared_ptr<ReceiveOperation<T>> receive_op) {
+  bool AssignReceiveOperation(
+      const std::shared_ptr<ReceiveOperation<T>>& receive_op) {
     auto src_ss = OccupySubSegment(receive_op->GetDstBuffer().GetSize());
     if (src_ss.GetSegmentSize() == 0)
       return false;
@@ -700,15 +701,15 @@ class Router : public IRouter<T> {
         m_possible_routes(policy->GetRoutingTable()) {
     // Create MemcpyInvokers or MemcpyWorkers between src and dst
     context.RequireMemcpyLanes(m_possible_routes);
-    std::cout << "Routing table: \n";
-    for (auto& kv : m_possible_routes) {
-      int src = kv.first;
-      std::cout << src << " ";
-      for (auto dst : kv.second) {
-        std::cout << " " << dst;
-      }
-      std::cout << std::endl;
-    }
+//    std::cout << "Routing table: \n";
+//    for (auto& kv : m_possible_routes) {
+//      int src = kv.first;
+//      std::cout << src << " ";
+//      for (auto dst : kv.second) {
+//        std::cout << " " << dst;
+//      }
+//      std::cout << std::endl;
+//    }
 
     std::set<device_t> dst_devs;
 
@@ -720,11 +721,11 @@ class Router : public IRouter<T> {
       // add all dst devices to the set
       dst_devs.insert(std::begin(p.second), std::end(p.second));
     }
-    std::cout << "receivers: ";
-    for (auto dst : dst_devs) {
-      std::cout << dst;
-    }
-    std::cout << std::endl;
+//    std::cout << "receivers: ";
+//    for (auto dst : dst_devs) {
+//      std::cout << dst;
+//    }
+//    std::cout << std::endl;
 
     // create a receiver for each dst device
     for (auto dst_dev : dst_devs) {

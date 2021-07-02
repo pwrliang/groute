@@ -8,9 +8,9 @@
 #include <utils/cuda_utils.h>
 #include <utils/stopwatch.h>
 
-#include <iostream>
+#include <cub/grid/grid_barrier.cuh>
 #include <sstream>
-#include <string>
+
 DEFINE_int32(data_size, 1024, "Start with a specific number of GPUs");
 DEFINE_int32(max_number, 10, "Start with a specific number of GPUs");
 DEFINE_int32(chunk_size, 1024, "Start with a specific number of GPUs");
@@ -247,7 +247,7 @@ void Rings() {
   std::cout << "Running time: " << sw.ms() << std::endl;
 }
 
-void TestSR(std::vector<int> &dsts) {
+void TestSR(std::vector<int>& dsts) {
   using data_type = int32_t;
   size_t size = 1024 * 1024 * 1024;
   size_t chunk_size = 8 * 1024 * 1024;
@@ -352,11 +352,154 @@ void TestSR(std::vector<int> &dsts) {
             << std::endl;
 }
 
+struct RankData {
+  uint32_t node;
+  float rank;
+
+  __host__ __device__ __forceinline__ RankData(uint32_t node, float rank)
+      : node(node), rank(rank) {}
+  __host__ __device__ __forceinline__ RankData()
+      : node(UINT_MAX), rank(-1.0f) {}
+  __device__ __host__ __forceinline__ int operator%(int rhs) {
+    return node % rhs;
+  }
+};
+
+template <typename T>
+void SplitSegment(groute::Stream& stream, groute::Segment<T>& input_seg,
+                  size_t num_split,
+                  std::vector<std::shared_ptr<groute::Worklist<T>>>& wl) {
+  auto seg_size = input_seg.GetSegmentSize();
+  auto* data = input_seg.GetSegmentPtr();
+
+  for (int idx = 0; idx < num_split; idx++) {
+    wl[idx]->ResetAsync(stream.cuda_stream);
+
+    groute::dev::Worklist<T> d_dev_wl = wl[idx]->DeviceObject();
+
+    LaunchKernel(stream, seg_size, [=] __device__() {
+      auto tid = TID_1D;
+      auto nthreads = TOTAL_THREADS_1D;
+
+      for (int i = tid; i < seg_size; i += nthreads) {
+        if (idx == data[i] % num_split) {
+          d_dev_wl.append_warp(data[i]);
+        }
+      }
+    });
+  }
+}
+
+template <typename T>
+__global__ void SplitKernel(cub::GridBarrier barrier,
+                            groute::Segment<T> input_seg, int num_split,
+                            groute::dev::Worklist<T>* output_wl) {
+  auto tid = TID_1D;
+  auto nthreads = TOTAL_THREADS_1D;
+  auto seg_size = input_seg.GetSegmentSize();
+  auto* data = input_seg.GetSegmentPtr();
+
+  for (int idx = 0; idx < num_split; idx++) {
+    if (tid == 0) {
+      output_wl[idx].reset();
+      barrier.Sync();
+    }
+    for (int i = tid; i < seg_size; i += nthreads) {
+      if (idx == data[i] % num_split) {
+        output_wl[idx].append_warp(data[i]);
+      }
+    }
+    barrier.Sync();
+  }
+}
+
+template <typename T>
+void SplitSegmentFused(groute::Stream& stream,
+                       cub::GridBarrierLifetime& barrier,
+                       groute::Segment<T>& input_seg, size_t num_split,
+                       thrust::device_vector<groute::dev::Worklist<T>>& wl) {
+  auto seg_size = input_seg.GetSegmentSize();
+  auto* data = input_seg.GetSegmentPtr();
+
+  int fused_work_residency = 0;
+  int BlockSize = 256;
+
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(&fused_work_residency,
+                                                SplitKernel<T>, BlockSize, 0);
+  barrier.Setup(fused_work_residency);
+  SplitKernel<<<fused_work_residency, BlockSize, 0, stream.cuda_stream>>>(
+      barrier, input_seg, num_split, thrust::raw_pointer_cast(wl.data()));
+}
+
+void TestSplit() {
+  groute::Stream stream;
+  thrust::device_vector<RankData> ranks(10 * 1000 * 1000);
+  int max_split = 4;
+  std::vector<std::shared_ptr<groute::Worklist<RankData>>> wls;
+  thrust::device_vector<groute::dev::Worklist<RankData>> d_wls;
+
+  std::cout << "Data size: " << ranks.size() * sizeof(RankData) / 1024 / 1024
+            << " MB" << std::endl;
+
+  {
+    thrust::host_vector<RankData> h_ranks(ranks.size());
+
+    for (int i = 0; i < h_ranks.size(); i++) {
+      h_ranks[i].node = i;
+    }
+    ranks = h_ranks;
+  }
+
+  for (int i = 0; i < max_split; i++) {
+    auto wl = std::make_shared<groute::Worklist<RankData>>(ranks.size());
+    wl->ResetAsync(stream.cuda_stream);
+    wls.push_back(wl);
+    d_wls.push_back(wl->DeviceObject());
+  }
+
+  groute::Segment<RankData> input_seg(thrust::raw_pointer_cast(ranks.data()),
+                                      ranks.size());
+  Stopwatch sw;
+
+  for (int i = 1; i <= max_split; i++) {
+    double total_time = 0;
+    for (int _ = 0; _ < 100; _++) {
+      sw.start();
+      SplitSegment(stream, input_seg, i, wls);
+      stream.Sync();
+      sw.stop();
+      total_time += sw.ms();
+    }
+
+    std::cout << "split num: " << i << " time: " << total_time / 100
+              << std::endl;
+  }
+
+  cub::GridBarrierLifetime barrier;
+
+  for (int i = 1; i <= max_split; i++) {
+    double total_time = 0;
+    for (int _ = 0; _ < 100; _++) {
+      sw.start();
+      SplitSegmentFused(stream, barrier, input_seg, i, d_wls);
+      stream.Sync();
+      sw.stop();
+      total_time += sw.ms();
+    }
+
+    std::cout << "split num: " << i << " time: " << total_time / 100
+              << std::endl;
+  }
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+  TestSplit();
+  return 0;
   //  Rings();
 
-  size_t size = 32 * 1024 * 1024;
+  size_t size = 1 * 1024 * 1024;
   char* src_ptr;
   std::vector<char*> dst_ptrs;
   int src_dev = 0;

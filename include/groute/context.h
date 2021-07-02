@@ -77,6 +77,7 @@ class Context {
   std::map<int, std::unique_ptr<MemoryPool>> m_memory_pools;
 
   std::map<std::pair<int, int>, CopyStatistics> m_copy_size;
+  std::vector<size_t> m_memcpy_info;
 
  public:
   void RequireMemcpyLane(int src_dev, int dst_dev) {
@@ -123,6 +124,7 @@ class Context {
         if (physical_dev_i != physical_dev_j)
           cudaDeviceEnablePeerAccess(physical_dev_j, 0);
     }
+    m_memcpy_info.reserve(1000 * 1000);
   }
 
   void CreateEventPools() {
@@ -197,6 +199,37 @@ class Context {
                 << " avg size: " << stat.size / 1024.0f / 1024 / stat.count
                 << " MB" << std::endl;
     }
+
+    size_t log_counts[32];
+    for (unsigned long& log_count : log_counts) {
+      log_count = 0;
+    }
+
+    // Scan
+    int max_log_length = 0;
+    size_t total_size = 0;
+    for (size_t length : m_memcpy_info) {
+      int log_length = -1;
+
+      total_size += length;
+      while (length != 0) {
+        length >>= 1;
+        log_length++;
+      }
+      if (log_length > max_log_length) {
+        max_log_length = log_length;
+      }
+
+      log_counts[log_length]++;
+    }
+
+    for (int i = 0; i <= max_log_length; i++) {
+      printf("    Size > 2^%i bytes: %lld (%.2f%%)\n", i,
+             (long long) log_counts[i],
+             (float) log_counts[i] * 100.0 / m_memcpy_info.size());
+    }
+    std::cout << "Total memcpy: " << m_memcpy_info.size() << " times, "
+              << total_size / 1024.0 / 1024 / 1024 << " GB" << std::endl;
   }
 
   std::shared_ptr<groute::MemcpyWork> QueueMemcpyWork(
@@ -231,6 +264,7 @@ class Context {
     copy->completion_callback = callback;
 
     m_memcpy_invokers.at(lane_identifier)->InvokeCopyAsync(copy);
+    m_memcpy_info.push_back(count);
 
     return copy;
   }

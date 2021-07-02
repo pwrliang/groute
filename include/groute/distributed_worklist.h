@@ -195,54 +195,6 @@ struct IDistributedWorklist {
 };
 
 template <typename T>
-void SplitSegment(groute::Stream& stream, std::shared_ptr<Worklist<T>> input_wl,
-                  size_t num_split,
-                  std::vector<std::shared_ptr<Worklist<T>>>& wl) {
-  auto rest_wl = wl[num_split];
-  Segment<T> input_seg = input_wl->ToSeg(stream);
-
-  for (int idx = 0; idx < num_split; idx++) {
-    auto* data = input_seg.GetSegmentPtr();
-    auto seg_size = input_seg.GetSegmentSize();
-
-    rest_wl->ResetAsync(stream.cuda_stream);
-    wl[idx]->ResetAsync(stream.cuda_stream);
-
-    dev::Worklist<T> d_rest_wl = rest_wl->DeviceObject();
-    dev::Worklist<T> d_dst_wl = wl[idx]->DeviceObject();
-
-    LaunchKernel(stream, seg_size, [=] __device__() {
-      auto tid = TID_1D;
-      auto nthreads = TOTAL_THREADS_1D;
-
-      for (int i = 0 + tid; i < seg_size; i += nthreads) {
-        auto& work = data[i];
-        bool add_to_dst = idx == work % num_split;
-        int add_to_dst_mask = __ballot_sync(__activemask(), add_to_dst ? 1 : 0);
-        int add_to_remain_mask =
-            __ballot_sync(__activemask(), !add_to_dst ? 1 : 0);
-
-        if (add_to_dst) {
-          int leader = __ffs(add_to_dst_mask) - 1;
-          int thread_offset = __popc(add_to_dst_mask & ((1 << lane_id()) - 1));
-          d_dst_wl.append_warp(work, leader, __popc(add_to_dst_mask),
-                               thread_offset);
-        } else {
-          int leader = __ffs(add_to_remain_mask) - 1;
-          int thread_offset =
-              __popc(add_to_remain_mask & ((1 << lane_id()) - 1));
-          d_rest_wl.append_warp(work, leader, __popc(add_to_remain_mask),
-                                thread_offset);
-        }
-      }
-    });
-
-    input_seg = rest_wl->ToSeg(stream);
-    std::swap(input_wl, rest_wl);
-  }
-}
-
-template <typename T>
 void SplitSegment(groute::Stream& stream, Segment<T>& input_seg,
                   size_t num_split,
                   std::vector<std::shared_ptr<Worklist<T>>>& wl) {
@@ -349,7 +301,10 @@ class DistributedWorklistPeer
   int m_numsplit;
   std::vector<std::shared_ptr<Worklist<TRemote>>> m_split_wls;
   thrust::device_vector<dev::Worklist<TRemote>> m_dev_split_wls;
-  std::shared_ptr<Worklist<TRemote>> m_empty_wl;
+
+  double m_time_other{};
+
+  double m_time_enqueue{};
 
   double m_time_split{};
   double m_time_send{};
@@ -585,12 +540,16 @@ class DistributedWorklistPeer
         auto rest_seg = m_numsplit;
         size_t total_sent_size = 0;
 
+        sw.start();
+
+        Stopwatch sw1;
+
+        sw1.start();
         for (int seg_idx = 0; seg_idx < m_numsplit; seg_idx++) {
-          auto len = m_split_wls[seg_idx]->GetLength(stream);
-          if (len > 0) {
-            //            seg_len[seg_idx] = len;
-            total_sent_size += len * sizeof(TRemote);
-            auto partial_seg = m_split_wls[seg_idx]->ToSeg(stream);
+          auto partial_seg = m_split_wls[seg_idx]->ToSeg(stream);
+
+          if (!partial_seg.Empty()) {
+            total_sent_size += partial_seg.GetSegmentSize() * sizeof(TRemote);
 
             partial_seg.metadata = seg_idx;
             submitted.push_back(m_link_out.Send(partial_seg, Event()));
@@ -600,7 +559,8 @@ class DistributedWorklistPeer
             m_seg_count[seg_idx]++;
           }
         }
-
+        sw1.stop();
+        m_time_enqueue += sw1.ms();
         //        int seg_idx = 0;
         //
         //        while (!seg_len.empty()) {
@@ -632,7 +592,6 @@ class DistributedWorklistPeer
         //          seg_idx = (seg_idx + 1) % m_numsplit;
         //        }
 
-        sw.start();
         for (auto& ft : submitted) {
           // N.B. future will be fulfill only after copy is done
           auto& ev = ft.get();
@@ -717,8 +676,6 @@ class DistributedWorklistPeer
       m_dev_split_wls.push_back(wl->DeviceObject());
     }
 
-    m_empty_wl = std::make_shared<Worklist<TRemote>>(nullptr, 0);
-
     GROUTE_CUDA_CHECK(cudaStreamSynchronize((cudaStream_t) 0));  // just in case
 
     m_receive_thread = std::thread([this]() { ReceiveLoop(); });
@@ -732,10 +689,18 @@ class DistributedWorklistPeer
     m_send_thread.join();
 
     std::stringstream ss;
+    size_t total_size = 0;
+
+    for (auto size : m_size_send) {
+      total_size += size;
+    }
 
     ss << "Dev " << m_dev << " SendOP enqueue times: " << m_send_times
        << " send time: " << m_time_send << " split time: " << m_time_split
-       << std::endl;
+       << " enqueue time: " << m_time_enqueue
+       << " Total comm: " << total_size / 1024.0 / 1024.0 << " MB "
+       << " Bandwidth: " << total_size / 1024.0 / 1024.0 / (m_time_send / 1024)
+       << " MB/s" << std::endl;
 
     for (int i = 0; i < m_numsplit; i++) {
       auto size_in_mb = m_size_send[i] / 1024.0 / 1024;

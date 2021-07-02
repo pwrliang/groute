@@ -30,6 +30,7 @@
 #ifndef __GROUTE_COMMON_H
 #define __GROUTE_COMMON_H
 #include <assert.h>
+
 #include <climits>
 #include <future>
 #include <map>
@@ -183,13 +184,17 @@ class Segment {
   bool Empty() const { return m_segment_size == 0; }
 
   /// @brief a pointer to segment start
-  T* GetSegmentPtr() const { return m_segment_ptr; }
+  __host__ __device__ __forceinline__ T* GetSegmentPtr() const {
+    return m_segment_ptr;
+  }
 
   /// @brief The total size of the source datum
   size_t GetTotalSize() const { return m_total_size; }
 
   /// @brief The size of the segment
-  size_t GetSegmentSize() const { return m_segment_size; }
+  __host__ __device__ __forceinline__ size_t GetSegmentSize() const {
+    return m_segment_size;
+  }
 
   /// @brief The offset within the original buffer
   size_t GetSegmentOffset() const { return m_segment_offset; }

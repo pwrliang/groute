@@ -127,5 +127,8 @@ add_executable(mb-tests test/micro-benchmarks/main.cu
         test/micro-benchmarks/timed_kernel.cu test/micro-benchmarks/high_priority_copy.cu)
 target_link_libraries(mb-tests gtest pthread ${EXTRA_LIBS})
 
+add_executable(mc_dl test/micro-benchmarks/main.cu test/async-tests/multi_channel_distributed_worklist_test.cu)
+target_link_libraries(mc_dl gtest pthread ${EXTRA_LIBS})
+
 add_executable(nvlink test/micro-benchmarks/nvlink.cu)
 target_link_libraries(nvlink ${EXTRA_LIBS})

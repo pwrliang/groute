@@ -249,6 +249,42 @@ class Policy : public IPolicy {
     return std::make_shared<Policy>(tables, Availability);
   }
 };
+
+class SimplePolicy : public IPolicy {
+ private:
+  RoutingTable m_table;
+  RouteStrategy m_strategy;
+
+ public:
+  SimplePolicy(const RoutingTable& topology,
+               RouteStrategy strategy = Availability)
+      : m_table{topology}, m_strategy(strategy) {}
+
+  RoutingTable GetRoutingTable() override { return m_table; }
+
+  Route GetRoute(device_t src_dev, int message_metadata) override {
+    assert(m_table.find(src_dev) != m_table.end());
+
+    return Route(m_table.at(src_dev), m_strategy);
+  }
+
+  int GetRouteNum() const override { return 1; }
+
+  static std::shared_ptr<IPolicy> CreateRingPolicy(
+      const std::vector<int>& dev_seq) {
+    RoutingTable topology;
+
+    for (device_t i = 0; i < dev_seq.size(); i++) {
+      topology[dev_seq[i]] = {dev_seq[(i + 1) % dev_seq.size()]};
+    }
+    // Instead of pushing to GPU 0, we push tasks to the first available device,
+    // this is beneficial for the case where the first device is already
+    // utilized with a prior task.
+    topology[Device::Host] = dev_seq;  // for initial work from host
+
+    return std::make_shared<Policy>(topology, Availability);
+  }
+};
 }  // namespace router
 }  // namespace groute
 

@@ -111,7 +111,7 @@ public:
   }
 
   Event(std::shared_ptr<IEvent> internal_event)
-      : m_internal_event(internal_event) {}
+      : m_internal_event(std::move(internal_event)) {}
 
   static Event Record(cudaStream_t stream) {
     cudaEvent_t cuda_event;
@@ -148,17 +148,13 @@ private:
   std::vector<Event> m_internal_events;
 
 public:
-  EventGroup() {}
-
-  ~EventGroup() {}
-
   static Event Create(const std::vector<Event> &evs) {
     auto ev_group = std::make_shared<EventGroup>();
     ev_group->m_internal_events = evs;
     return Event(ev_group);
   }
 
-  void Add(Event ev) { m_internal_events.push_back(ev); }
+  void Add(const Event& ev) { m_internal_events.push_back(ev); }
 
   void Merge(EventGroup &other) {
     for (auto &ev : other.m_internal_events) {

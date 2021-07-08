@@ -88,9 +88,9 @@ struct IMultiChannelDistributedWorklistPeer {
 
 template <typename TLocal, typename TRemote, typename SplitOps>
 __global__ void MultiSplitSendKernel(
-    SplitOps split_ops, TLocal* work_ptr, uint32_t work_size, int nrings,
+    SplitOps split_ops, TLocal* work_ptr, uint32_t work_size,
     dev::CircularWorklist<TLocal> local_work,
-    dev::CircularWorklist<TRemote>* remote_works) {
+    dev::CircularWorklist<TRemote> remote_works) {
   int tid = TID_1D;
 
   if (tid < work_size) {
@@ -105,34 +105,48 @@ __global__ void MultiSplitSendKernel(
     if (flags & SF_Pass) {
       // pack data
       TRemote packed = split_ops.pack(work);
-      int wl_idx = packed % nrings;
 
-      remote_works[wl_idx].append_warp(packed);
+      remote_works.append_warp(packed);
     }
   }
 }
 
 template <typename TLocal, typename TRemote, typename SplitOps>
 __global__ void MultiSplitReceiveKernel(
-    SplitOps split_ops, TRemote* work_ptr, uint32_t work_size, int nrings,
+    SplitOps split_ops, TRemote* work_ptr, uint32_t work_size,
     dev::CircularWorklist<TLocal> local_work,
-    dev::CircularWorklist<TRemote>* remote_works, dev::Counter filter_counter) {
+    dev::CircularWorklist<TRemote> remote_work, dev::Counter filter_counter) {
   int tid = TID_1D;
   if (tid < work_size) {
     TRemote work = work_ptr[tid];
     SplitFlags flags = split_ops.on_receive(work);
 
+    int filter_mask = __ballot_sync(__activemask(), flags == SF_None ? 1 : 0);
+    int take_mask = __ballot_sync(__activemask(), flags & SF_Take ? 1 : 0);
+    int pass_mask = __ballot_sync(__activemask(), flags & SF_Pass ? 1 : 0);
+    // never inline the masks into the conditional branching below
+    // although it may work. The compiler should optimize this anyhow,
+    // but this avoids him from unifying the __ballot's
+
     if (flags == SF_None) {
-      filter_counter.add(1);
+      int filter_leader = __ffs(filter_mask) - 1;
+      if (lane_id() == filter_leader)
+        filter_counter.add(__popc(filter_mask));
     } else {
       if (flags & SF_Take) {
-        local_work.append_warp(split_ops.unpack(work));
+        int take_leader = __ffs(take_mask) - 1;
+        int thread_offset = __popc(take_mask & ((1 << lane_id()) - 1));
+        local_work.append_warp(split_ops.unpack(work), take_leader,
+                               __popc(take_mask), thread_offset);
       }
 
-      if (flags & SF_Pass) {
-        int wl_idx = work % nrings;
-        // belongs to another device
-        remote_works[wl_idx].append_warp(work);
+      if (flags & SF_Pass)
+      // pass on to another device
+      {
+        int pass_leader = __ffs(pass_mask) - 1;
+        int thread_offset = __popc(pass_mask & ((1 << lane_id()) - 1));
+        remote_work.append_warp(work, pass_leader, __popc(pass_mask),
+                                thread_offset);
       }
     }
   }
@@ -237,7 +251,7 @@ class MultiChannelDistributedWorklistPeer
 
   double m_time_enqueue{};
 
-  double m_time_split{};
+  double m_time_recv{};
   double m_time_send{};
   uint32_t m_send_times{};
   std::vector<size_t> m_size_send, m_seg_count;
@@ -249,7 +263,7 @@ class MultiChannelDistributedWorklistPeer
           remote_works,
       thrust::device_vector<groute::dev::CircularWorklist<TRemote>>&
           dev_remote_works,
-      groute::Stream& stream) {
+      int channel, groute::Stream& stream) {
     counter.ResetAsync(stream.cuda_stream);
 
     dim3 block_dims(DBS, 1, 1);
@@ -259,10 +273,8 @@ class MultiChannelDistributedWorklistPeer
     MultiSplitReceiveKernel<TLocal, TRemote, SplitOps>
         <<<grid_dims, block_dims, 0, stream.cuda_stream>>>(
             m_split_ops, received_work.GetSegmentPtr(),
-            received_work.GetSegmentSize(), m_router_count,
-            local_work.DeviceObject(),
-            thrust::raw_pointer_cast(dev_remote_works.data()),
-            counter.DeviceObject());
+            received_work.GetSegmentSize(), local_work.DeviceObject(),
+            remote_works[channel]->DeviceObject(), counter.DeviceObject());
 
     local_work.SyncAppendAllocAsync(stream.cuda_stream);
     for (auto& remote_work : remote_works) {
@@ -283,15 +295,14 @@ class MultiChannelDistributedWorklistPeer
           remote_works,
       thrust::device_vector<groute::dev::CircularWorklist<TRemote>>&
           dev_remote_works,
-      groute::Stream& stream) {
+      int channel, groute::Stream& stream) {
     dim3 block_dims(DBS, 1, 1);
     dim3 grid_dims(round_up(sent_work.GetSegmentSize(), block_dims.x), 1, 1);
 
     MultiSplitSendKernel<TLocal, TRemote, SplitOps>
         <<<grid_dims, block_dims, 0, stream.cuda_stream>>>(
             m_split_ops, sent_work.GetSegmentPtr(), sent_work.GetSegmentSize(),
-            m_router_count, local_work.DeviceObject(),
-            thrust::raw_pointer_cast(dev_remote_works.data()));
+            local_work.DeviceObject(), remote_works[channel]->DeviceObject());
 
     for (auto& remote_work : remote_works) {
       remote_work->SyncAppendAllocAsync(stream.cuda_stream);
@@ -303,6 +314,7 @@ class MultiChannelDistributedWorklistPeer
     Stream stream = m_context.CreateStream(
         m_dev, (m_flags & DW_HighPriorityReceive) ? SP_High : SP_Default);
     auto& counter = *(m_filter_counters[channel]);
+    Stopwatch sw;
 
     while (true) {
       auto fut = m_links_in[channel].Receive();
@@ -312,11 +324,15 @@ class MultiChannelDistributedWorklistPeer
         break;
       }
       {
+        sw.start();
         // queue a wait on stream
         seg.Wait(stream.cuda_stream);
         SplitReceive(counter, seg, m_local_input_worklist,
                      m_pass_remote_output_worklists,
-                     m_dev_pass_remote_output_worklists, stream);
+                     m_dev_pass_remote_output_worklists, channel, stream);
+        stream.Sync();
+        sw.stop();
+        m_time_recv += sw.ms();
       }
 
       // generate an event for synchronizing purpose
@@ -352,8 +368,8 @@ class MultiChannelDistributedWorklistPeer
   void SendLoop() {
     m_context.SetDevice(m_dev);
     Stream stream = m_context.CreateStream(m_dev);
-
     int source = 0;
+    Stopwatch sw, sw1;
 
     while (true) {
       std::vector<std::shared_ptr<CircularWorklist<TRemote>>>* worklists;
@@ -411,6 +427,9 @@ class MultiChannelDistributedWorklistPeer
 
       std::vector<PendingSend> send_ops;
 
+      m_send_times++;
+      sw.start();
+      sw1.start();
       for (int channel = 0; channel < m_router_count; channel++) {
         auto& worklist = (*worklists)[channel];
         std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
@@ -421,12 +440,16 @@ class MultiChannelDistributedWorklistPeer
                                          output_seg.GetSegmentSize());
         }
       }
+      sw.stop();
+      m_time_enqueue += sw.ms();
 
       for (auto& p_send : send_ops) {
         auto& worklist = (*worklists)[p_send.channel];
         p_send.fut.get().Wait(stream.cuda_stream);
         worklist->PopItemsAsync(p_send.len, stream.cuda_stream);
       }
+      sw1.stop();
+      m_time_send += sw1.ms();
       stream.Sync();
     }
   }
@@ -511,7 +534,7 @@ class MultiChannelDistributedWorklistPeer
     }
 
     ss << "Dev " << m_dev << " SendOP enqueue times: " << m_send_times
-       << " send time: " << m_time_send << " split time: " << m_time_split
+       << " send time: " << m_time_send << " split-recv time: " << m_time_recv
        << " enqueue time: " << m_time_enqueue
        << " Total comm: " << total_size / 1024.0 / 1024.0 << " MB "
        << " Bandwidth: " << total_size / 1024.0 / 1024.0 / (m_time_send / 1024)
@@ -555,14 +578,17 @@ class MultiChannelDistributedWorklistPeer
     return segs;
   }
 
+  int m_channel = 0;
+
   void PerformSplitSend(Segment<TLocal>& split_work, Stream& stream) override {
     if (split_work.Empty())
       return;
+    m_channel = (m_channel + 1) % m_router_count;
     // All work items in m_local_input_worklist are split
     // the content in m_send_remote_output_worklist will be sent out by SendLoop
     SplitSend(split_work, m_local_input_worklist,
               m_send_remote_output_worklists,
-              m_dev_send_remote_output_worklists, stream);
+              m_dev_send_remote_output_worklists, m_channel, stream);
     Event split_ev = m_context.RecordEvent(m_dev, stream.cuda_stream);
     SignalRemoteWork(split_ev);
   }

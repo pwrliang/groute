@@ -152,7 +152,6 @@ __global__ void SplitReceiveKernel(SplitOps split_ops, TRemote* work_ptr,
         }
       }
     }
-
     else  // templated, no warp operations
     {
       if (flags == SF_None) {

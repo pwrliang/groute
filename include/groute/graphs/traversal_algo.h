@@ -278,6 +278,9 @@ struct __MultiRunner__ {
       worklist_routers.push_back(
           std::make_shared<groute::router::Router<TRemote>>(
               context, groute::router::Policy::CreateRingPolicy(ngpus)));
+      worklist_routers.push_back(
+          std::make_shared<groute::router::Router<TRemote>>(
+              context, groute::router::Policy::CreateRingPolicy(ngpus)));
     }
     groute::MultiChannelDistributedWorklist<TLocal, TRemote>
         distributed_worklist(context, worklist_routers, ngpus);

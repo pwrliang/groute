@@ -133,6 +133,12 @@ __global__ void PageRankInit__Multi__(TGraph graph,
   }
 }
 
+__device__ double atomicExchD(double *address, double val) {
+  unsigned long long int* address_as_ull = (unsigned long long int*)address;
+  unsigned long long res = atomicExch(address_as_ull, __double_as_longlong(val));
+  return __longlong_as_double(res);
+}
+
 template <typename TGraph, template <typename> class RankDatum,
           template <typename> class ResidualDatum, typename WorkSource,
           template <typename> class TWorklist>
@@ -153,7 +159,7 @@ __global__ void PageRankKernel__Single__NestedParallelism__(
 
     if (i < work_size) {
       index_t node = work_source.get_work(i);
-      rank_t res = atomicExch(residual.get_item_ptr(node), 0);
+      rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
 
       if (res > 0) {
         current_ranks[node] += res;
@@ -196,7 +202,7 @@ PageRankKernel__Single__(TGraph graph, RankDatum<rank_t> current_ranks,
   for (uint32_t i = 0 + tid; i < work_size; i += nthreads) {
     index_t node = work_source.get_work(i);
 
-    rank_t res = atomicExch(residual.get_item_ptr(node), 0);
+    rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
     if (res == 0)
       continue; // might happen if work_source has duplicates
 
@@ -240,7 +246,7 @@ __global__ void PageRankKernel__Multi__NestedParallelism__(
 
     if (i < work_size) {
       index_t node = work_source.get_work(i);
-      rank_t res = atomicExch(residual.get_item_ptr(node), 0);
+      rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
 
       if (res > 0) {
         current_ranks[node] += res;
@@ -294,7 +300,7 @@ PageRankKernel__Multi__(TGraph graph, RankDatum<rank_t> current_ranks,
   for (uint32_t i = 0 + tid; i < work_size; i += nthreads) {
     index_t node = work_source.get_work(i);
 
-    rank_t res = atomicExch(residual.get_item_ptr(node), 0);
+    rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
     if (res == 0)
       continue; // might happen if work_source has duplicates
 
@@ -357,12 +363,13 @@ public:
   }
 
   __device__ __forceinline__ remote_work_t pack(local_work_t work) {
-    return RankData(work, atomicExch(m_residual.get_item_ptr(work), 0));
+    return RankData(work, atomicExchD(m_residual.get_item_ptr(work), 0));
   }
 
   __device__ __forceinline__ local_work_t unpack(const remote_work_t &work) {
     return work.node;
   }
+
 };
 
 __global__ void
@@ -377,7 +384,7 @@ PageRankPackKernel(groute::graphs::dev::GraphDatum<rank_t> residual,
     index_t halo_node = halos_datum[i]; // promised to be unique
     if (halos_marks[halo_node] == 1) {
       remote_worklist.append_warp(
-          RankData(halo_node, atomicExch(residual.get_item_ptr(halo_node), 0)));
+          RankData(halo_node, atomicExchD(residual.get_item_ptr(halo_node), 0)));
       halos_marks[halo_node] = 0;
     }
   }

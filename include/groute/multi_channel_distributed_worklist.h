@@ -277,9 +277,9 @@ class MultiChannelDistributedWorklistPeer
             remote_works[channel]->DeviceObject(), counter.DeviceObject());
 
     local_work.SyncAppendAllocAsync(stream.cuda_stream);
-    for (auto& remote_work : remote_works) {
-      remote_work->SyncAppendAllocAsync(stream.cuda_stream);
-    }
+//    for (auto& remote_work : remote_works) {
+      remote_works[channel]->SyncAppendAllocAsync(stream.cuda_stream);
+//    }
 
     // Report work
     // TODO (later): Try to avoid copies to host
@@ -304,9 +304,9 @@ class MultiChannelDistributedWorklistPeer
             m_split_ops, sent_work.GetSegmentPtr(), sent_work.GetSegmentSize(),
             local_work.DeviceObject(), remote_works[channel]->DeviceObject());
 
-    for (auto& remote_work : remote_works) {
-      remote_work->SyncAppendAllocAsync(stream.cuda_stream);
-    }
+//    for (auto& remote_work : remote_works) {
+    remote_works[channel]->SyncAppendAllocAsync(stream.cuda_stream);
+//    }
   }
 
   void ReceiveLoop(int channel) {

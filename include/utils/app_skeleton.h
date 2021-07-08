@@ -109,6 +109,8 @@ DEFINE_double(wl_alloc_factor_pass, 0.2, "Worklist allocation factor: pass-throu
 DEFINE_bool(gen_weights, false, "Generate edge weights if missing in graph input");
 DEFINE_int32(gen_weight_range, 100, "The range to generate edge weights from (coordinate this parameter with nf-delta if running sssp-nf)");
 
+DEFINE_int32(nrings, 1, "number of rings");
+
 #ifdef HAVE_METIS
 DEFINE_bool(pn, true, "Partition the input graph using METIS (requires a symmetric graph)");
 #else

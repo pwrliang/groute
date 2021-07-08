@@ -82,12 +82,12 @@ void TestMultiChannelDistributedWorklistTest(size_t histo_size,
 
   exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
       context, groute::router::Policy::CreateRingPolicy(ngpus)));
-  //  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-  //      context, groute::router::Policy::CreateRingPolicy(ngpus)));
+  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
+      context, groute::router::Policy::CreateRingPolicy(ngpus)));
 
-    exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-        context, groute::router::SimplePolicy::CreateRingPolicy(
-                     {0, 3, 2, 1, 7, 4, 5, 6})));
+  //    exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
+  //        context, groute::router::SimplePolicy::CreateRingPolicy(
+  //                     {0, 3, 2, 1, 7, 4, 5, 6})));
   //  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
   //      context, groute::router::SimplePolicy::CreateRingPolicy(
   //                   {0, 6, 5, 4, 7, 1, 2, 3})));

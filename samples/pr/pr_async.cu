@@ -486,9 +486,9 @@ public:
   Solver(groute::Context &context, ProblemType &problem) : m_problem(problem) {}
 
   void Solve(groute::Context &context, groute::device_t dev,
-             groute::DistributedWorklist<local_work_t, remote_work_t>
+             groute::MultiChannelDistributedWorklist<local_work_t, remote_work_t>
                  &distributed_worklist,
-             groute::IDistributedWorklistPeer<local_work_t, remote_work_t>
+             groute::IMultiChannelDistributedWorklistPeer<local_work_t, remote_work_t>
                  *worklist_peer,
              groute::Stream &stream) {
     auto &input_worklist = worklist_peer->GetLocalInputWorklist();
@@ -585,9 +585,8 @@ struct Algo {
 
   static void Init(groute::graphs::traversal::Context<pr::Algo> &context,
                    groute::graphs::multi::CSRGraphAllocator &graph_manager,
-                   groute::router::Router<remote_work_t> &worklist_router,
-                   groute::DistributedWorklist<local_work_t, remote_work_t>
-                       &distributed_worklist) {
+                   std::vector<std::shared_ptr<groute::router::IRouter<remote_work_t>>> &worklist_router,
+                   groute::IDistributedWorklist& distributed_worklist) {
     distributed_worklist.ReportWork(
         context.host_graph.nnodes); // PR starts with all nodes
   }

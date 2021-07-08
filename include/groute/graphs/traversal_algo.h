@@ -35,6 +35,7 @@
 #include <groute/event_pool.h>
 #include <groute/fused_distributed_worklist.h>
 #include <groute/graphs/csr_graph.h>
+#include <groute/multi_channel_distributed_worklist.h>
 #include <utils/markers.h>
 #include <utils/parser.h>
 #include <utils/stopwatch.h>
@@ -258,14 +259,31 @@ struct __MultiRunner__ {
                                      (size_t) 1)
                                : FLAGS_pipe_alloc_size;
 
-    groute::router::Router<TRemote> worklist_router(
-        context, groute::router::Policy::CreateMultiRingsPolicy(ngpus));
+    std::vector<std::shared_ptr<groute::router::IRouter<TRemote>>>
+        worklist_routers;
 
-    groute::DistributedWorklist<TLocal, TRemote> distributed_worklist(
-        context, worklist_router, ngpus);
+    if (ngpus == 8) {
+      std::vector<std::vector<int>> seqs{{0, 3, 2, 1, 7, 4, 5, 6},
+                                         {0, 6, 5, 4, 7, 1, 2, 3},
+                                         {0, 2, 4, 6, 7, 5, 3, 1},
+                                         {0, 1, 3, 5, 7, 6, 4, 2}};
+      seqs.resize(FLAGS_nrings);
 
-    std::vector<
-        std::unique_ptr<groute::IDistributedWorklistPeer<TLocal, TRemote>>>
+      for (auto& seq : seqs) {
+        worklist_routers.push_back(
+            std::make_shared<groute::router::Router<TRemote>>(
+                context, groute::router::SimplePolicy::CreateRingPolicy(seq)));
+      }
+    } else {
+      worklist_routers.push_back(
+          std::make_shared<groute::router::Router<TRemote>>(
+              context, groute::router::Policy::CreateRingPolicy(ngpus)));
+    }
+    groute::MultiChannelDistributedWorklist<TLocal, TRemote>
+        distributed_worklist(context, worklist_routers, ngpus);
+
+    std::vector<std::unique_ptr<
+        groute::IMultiChannelDistributedWorklistPeer<TLocal, TRemote>>>
         worklist_peers;
     std::vector<std::thread> dev_threads;
 
@@ -337,7 +355,7 @@ struct __MultiRunner__ {
 
     barrier.Sync();  // wait for devices to init
 
-    Algo::Init(context, dev_graph_allocator, worklist_router,
+    Algo::Init(context, dev_graph_allocator, worklist_routers,
                distributed_worklist);  // init from host
 
     Stopwatch sw(true);  // all threads are running, start timing
@@ -563,7 +581,8 @@ struct __GenericMultiSolver__ {
       : m_problem(problem) {}
 
   void Solve(groute::Context& context, groute::device_t dev,
-             groute::DistributedWorklist<TLocal, TRemote>& distributed_worklist,
+             groute::MultiChannelDistributedWorklist<TLocal, TRemote>&
+                 distributed_worklist,
              groute::IDistributedWorklistPeer<TLocal, TRemote>* worklist_peer,
              groute::Stream& stream) {
     auto& input_worklist = worklist_peer->GetLocalInputWorklist();

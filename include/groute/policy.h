@@ -41,7 +41,7 @@
 
 #include "gflags/gflags.h"
 
-DEFINE_int32(nrings, 1, "Start with a specific number of GPUs");
+DECLARE_int32(nrings);
 
 namespace groute {
 namespace router {

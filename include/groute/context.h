@@ -241,9 +241,6 @@ class Context {
     int src_dev_id = m_dev_map.at(src_dev);
     int dst_dev_id = m_dev_map.at(dst_dev);
 
-    m_copy_size[std::make_pair(src_dev_id, dst_dev_id)].size += count;
-    m_copy_size[std::make_pair(src_dev_id, dst_dev_id)].count++;
-
     // resolve the correct device associated with the copy stream of this lane
     // we need this in order to provide the correct event pool
     int stream_dev_id = m_dev_map.at(lane_identifier.first);
@@ -264,6 +261,13 @@ class Context {
     copy->completion_callback = callback;
 
     m_memcpy_invokers.at(lane_identifier)->InvokeCopyAsync(copy);
+
+    auto key = std::make_pair(src_dev_id, dst_dev_id);
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    m_copy_size[key].size += count;
+    m_copy_size[key].count++;
     m_memcpy_info.push_back(count);
 
     return copy;

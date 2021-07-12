@@ -190,6 +190,7 @@ class Context {
   }
 
   ~Context() {
+    /*
     std::cout << "Communication statistics: " << std::endl;
     for (auto& kv_size : m_copy_size) {
       auto stat = kv_size.second;
@@ -206,7 +207,7 @@ class Context {
     }
 
     // Scan
-    int max_log_length = 0;
+    int max_log_length = -1;
     size_t total_size = 0;
     for (size_t length : m_memcpy_info) {
       int log_length = -1;
@@ -230,6 +231,7 @@ class Context {
     }
     std::cout << "Total memcpy: " << m_memcpy_info.size() << " times, "
               << total_size / 1024.0 / 1024 / 1024 << " GB" << std::endl;
+    */
   }
 
   std::shared_ptr<groute::MemcpyWork> QueueMemcpyWork(
@@ -262,13 +264,13 @@ class Context {
 
     m_memcpy_invokers.at(lane_identifier)->InvokeCopyAsync(copy);
 
-    auto key = std::make_pair(src_dev_id, dst_dev_id);
+//    auto key = std::make_pair(src_dev_id, dst_dev_id);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    m_copy_size[key].size += count;
-    m_copy_size[key].count++;
-    m_memcpy_info.push_back(count);
+//    std::lock_guard<std::mutex> lock(m_mutex);
+//
+//    m_copy_size[key].size += count;
+//    m_copy_size[key].count++;
+//    m_memcpy_info.push_back(count);
 
     return copy;
   }

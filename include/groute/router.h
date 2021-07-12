@@ -624,13 +624,11 @@ class Router : public IRouter<T> {
       }
 
       bool connecting = true;
+      // go on at rounds, give an equal chance to all receivers
       while (connecting) {
         connecting = false;
         for (auto dst_dev : route.dst_devs) {
-          if (m_router.m_receivers
-                  .at(dst_dev)  // go on at rounds, give an equal chance to all
-                                // receivers
-                  ->Assign()) {
+          if (m_router.m_receivers.at(dst_dev)->Assign()) {
             connecting = true;
           }
         }
@@ -701,15 +699,15 @@ class Router : public IRouter<T> {
         m_possible_routes(policy->GetRoutingTable()) {
     // Create MemcpyInvokers or MemcpyWorkers between src and dst
     context.RequireMemcpyLanes(m_possible_routes);
-//    std::cout << "Routing table: \n";
-//    for (auto& kv : m_possible_routes) {
-//      int src = kv.first;
-//      std::cout << src << " ";
-//      for (auto dst : kv.second) {
-//        std::cout << " " << dst;
-//      }
-//      std::cout << std::endl;
-//    }
+    //    std::cout << "Routing table: \n";
+    //    for (auto& kv : m_possible_routes) {
+    //      int src = kv.first;
+    //      std::cout << src << " ";
+    //      for (auto dst : kv.second) {
+    //        std::cout << " " << dst;
+    //      }
+    //      std::cout << std::endl;
+    //    }
 
     std::set<device_t> dst_devs;
 
@@ -721,11 +719,11 @@ class Router : public IRouter<T> {
       // add all dst devices to the set
       dst_devs.insert(std::begin(p.second), std::end(p.second));
     }
-//    std::cout << "receivers: ";
-//    for (auto dst : dst_devs) {
-//      std::cout << dst;
-//    }
-//    std::cout << std::endl;
+    //    std::cout << "receivers: ";
+    //    for (auto dst : dst_devs) {
+    //      std::cout << dst;
+    //    }
+    //    std::cout << std::endl;
 
     // create a receiver for each dst device
     for (auto dst_dev : dst_devs) {

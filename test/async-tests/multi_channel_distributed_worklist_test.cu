@@ -40,9 +40,9 @@ void TestMultiChannelDistributedWorklistTest(size_t histo_size,
                                              size_t work_size) {
   int ngpus;
   GROUTE_CUDA_CHECK(cudaGetDeviceCount(&ngpus));
-  size_t max_work_size = work_size;  // round_up(work_size, (size_t)ngpus);
+  size_t max_work_size = round_up(work_size, (size_t)ngpus);
   size_t num_exch_buffs = 4 * ngpus;
-  size_t max_exch_size = work_size;  // round_up(max_work_size, num_exch_buffs);
+  size_t max_exch_size = round_up(max_work_size, num_exch_buffs);
   size_t histo_seg_size = histo_size / ngpus;
   histo_size = histo_seg_size * ngpus;
 
@@ -80,17 +80,17 @@ void TestMultiChannelDistributedWorklistTest(size_t histo_size,
 
   std::vector<std::shared_ptr<groute::router::IRouter<int>>> exchange_routers;
 
-  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-      context, groute::router::Policy::CreateRingPolicy(ngpus)));
-  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-      context, groute::router::Policy::CreateRingPolicy(ngpus)));
-
-  //    exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-  //        context, groute::router::SimplePolicy::CreateRingPolicy(
-  //                     {0, 3, 2, 1, 7, 4, 5, 6})));
   //  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
-  //      context, groute::router::SimplePolicy::CreateRingPolicy(
-  //                   {0, 6, 5, 4, 7, 1, 2, 3})));
+  //      context, groute::router::Policy::CreateRingPolicy(ngpus)));
+  //  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
+  //      context, groute::router::Policy::CreateRingPolicy(ngpus)));
+
+  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
+      context, groute::router::SimplePolicy::CreateRingPolicy(
+                   {0, 3, 2, 1, 7, 4, 5, 6})));
+  exchange_routers.push_back(std::make_shared<groute::router::Router<int>>(
+      context, groute::router::SimplePolicy::CreateRingPolicy(
+                   {0, 6, 5, 4, 7, 1, 2, 3})));
 
   groute::MultiChannelDistributedWorklist<int, int> distributed_worklist(
       context, exchange_routers, ngpus);
@@ -214,5 +214,5 @@ void TestMultiChannelDistributedWorklistTest(size_t histo_size,
 }
 
 TEST(Worklist, Ring_2) {
-  TestMultiChannelDistributedWorklistTest(1024, 409600);
+  TestMultiChannelDistributedWorklistTest(1024, 40960000);
 }

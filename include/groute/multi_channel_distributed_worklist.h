@@ -277,9 +277,9 @@ class MultiChannelDistributedWorklistPeer
             remote_works[channel]->DeviceObject(), counter.DeviceObject());
 
     local_work.SyncAppendAllocAsync(stream.cuda_stream);
-//    for (auto& remote_work : remote_works) {
-      remote_works[channel]->SyncAppendAllocAsync(stream.cuda_stream);
-//    }
+    //    for (auto& remote_work : remote_works) {
+    remote_works[channel]->SyncAppendAllocAsync(stream.cuda_stream);
+    //    }
 
     // Report work
     // TODO (later): Try to avoid copies to host
@@ -304,9 +304,9 @@ class MultiChannelDistributedWorklistPeer
             m_split_ops, sent_work.GetSegmentPtr(), sent_work.GetSegmentSize(),
             local_work.DeviceObject(), remote_works[channel]->DeviceObject());
 
-//    for (auto& remote_work : remote_works) {
+    //    for (auto& remote_work : remote_works) {
     remote_works[channel]->SyncAppendAllocAsync(stream.cuda_stream);
-//    }
+    //    }
   }
 
   void ReceiveLoop(int channel) {
@@ -430,26 +430,38 @@ class MultiChannelDistributedWorklistPeer
       m_send_times++;
       sw.start();
       sw1.start();
+      std::vector<std::vector<Segment<TRemote>>> collected_segs(m_router_count);
+
       for (int channel = 0; channel < m_router_count; channel++) {
         auto& worklist = (*worklists)[channel];
-        std::vector<Segment<TRemote>> output_segs = worklist->ToSegs(stream);
-
-        for (auto output_seg : output_segs) {
-          auto fut = m_links_out[channel].Send(output_seg, Event());
-          send_ops.template emplace_back(channel, fut,
-                                         output_seg.GetSegmentSize());
+        for (auto& seg : worklist->ToSegs(stream)) {
+          collected_segs[channel].push_back(seg);
         }
       }
       sw.stop();
       m_time_enqueue += sw.ms();
 
+      for (int channel = 0; channel < m_router_count; channel++) {
+        for (auto& output_seg : collected_segs[channel]) {
+          auto fut = m_links_out[channel].Send(output_seg, Event());
+          send_ops.template emplace_back(channel, fut,
+                                         output_seg.GetSegmentSize());
+        }
+      }
+
+      std::stringstream ss;
       for (auto& p_send : send_ops) {
         auto& worklist = (*worklists)[p_send.channel];
         p_send.fut.get().Wait(stream.cuda_stream);
         worklist->PopItemsAsync(p_send.len, stream.cuda_stream);
+        ss << "Ring: " << p_send.channel << " Len: " << p_send.len << " ";
       }
       sw1.stop();
       m_time_send += sw1.ms();
+      ss << std::endl;
+      if (m_dev == 0 && !send_ops.empty()) {
+        std::cout << ss.str();
+      }
       stream.Sync();
     }
   }

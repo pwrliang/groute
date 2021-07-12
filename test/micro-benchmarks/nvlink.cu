@@ -15,6 +15,7 @@ DEFINE_int32(data_size, 1024, "Start with a specific number of GPUs");
 DEFINE_int32(max_number, 10, "Start with a specific number of GPUs");
 DEFINE_int32(chunk_size, 1024, "Start with a specific number of GPUs");
 DEFINE_string(dst_dev, "0", "");
+DEFINE_int32(nrings, 1, "number of rings");
 
 __global__ static void copyp2p(void* dest, const void* src, size_t size) {
   size_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
@@ -493,13 +494,13 @@ void TestSplit() {
 }
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+//  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  TestSplit();
-  return 0;
+//  TestSplit();
+//  return 0;
   //  Rings();
 
-  size_t size = 1 * 1024 * 1024;
+  size_t size = 512 * 1024;
   char* src_ptr;
   std::vector<char*> dst_ptrs;
   int src_dev = 0;
@@ -564,5 +565,5 @@ int main(int argc, char** argv) {
 
   std::cout << std::endl;
 
-  TestSR(dst_devs);
+//  TestSR(dst_devs);
 }

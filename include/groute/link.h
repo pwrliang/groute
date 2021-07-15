@@ -93,6 +93,10 @@ class Link : public router::IPipelinedReceiver<T>, public router::ISender<T> {
 
   void Sync() const override { GetReceiver()->Sync(); }
 
+  bool IsReady() override {
+    return m_receiver->IsReady();
+  }
+
   std::shared_future<router::PendingSegment<T>> Receive() override {
     return GetReceiver()->Receive();
   }

@@ -494,13 +494,13 @@ void TestSplit() {
 }
 
 int main(int argc, char** argv) {
-//  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  //  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-//  TestSplit();
-//  return 0;
+  //  TestSplit();
+  //  return 0;
   //  Rings();
 
-  size_t size = 512 * 1024;
+  size_t size = 10 * 1024 * 1024;
   char* src_ptr;
   std::vector<char*> dst_ptrs;
   int src_dev = 0;
@@ -539,31 +539,31 @@ int main(int argc, char** argv) {
     double total_time = 0;
     size_t total_size = 0;
     Stopwatch sw;
-
+    sw.start();
     for (int iter = 0; iter < 100; iter++) {
-      sw.start();
       for (int i = 0; i < dst_devs.size(); i++) {
         GROUTE_CUDA_CHECK(cudaMemcpyAsync(dst_ptrs[i], src_ptr, size,
                                           cudaMemcpyDeviceToDevice,
                                           streams[i].cuda_stream));
       }
 
-      for (auto& stream : streams) {
-        stream.Sync();
-      }
-
-      sw.stop();
-      total_time += sw.ms();
       total_size += size * dst_devs.size();
     }
+
+    for (auto& stream : streams) {
+      stream.Sync();
+    }
+    sw.stop();
+    total_time += sw.ms();
     std::cout << "Copy with cudaMemcpyAsync:" << std::endl;
     std::cout << "Total time: " << total_time << " ms"
               << " Total size: " << (float) total_size / 1024 / 1024 << " MB "
-              << " Bandwidth: " << (float) size / 1024 / 1024 / (sw.ms() / 1000)
+              << " Bandwidth: "
+              << (float) total_size / 1024 / 1024 / (total_time / 1000)
               << " MB/s" << std::endl;
   }
 
   std::cout << std::endl;
 
-//  TestSR(dst_devs);
+  //  TestSR(dst_devs);
 }

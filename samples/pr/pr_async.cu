@@ -26,24 +26,21 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+#include <gflags/gflags.h>
+#include <groute/cta_work.h>
+#include <groute/distributed_worklist.h>
+#include <groute/event_pool.h>
+#include <groute/graphs/csr_graph.h>
+#include <groute/graphs/traversal_algo.h>
+#include <utils/parser.h>
+#include <utils/stopwatch.h>
+#include <utils/utils.h>
+
 #include <algorithm>
 #include <memory>
 #include <random>
 #include <thread>
 #include <vector>
-
-#include <gflags/gflags.h>
-
-#include <groute/cta_work.h>
-#include <groute/distributed_worklist.h>
-#include <groute/event_pool.h>
-
-#include <groute/graphs/csr_graph.h>
-#include <groute/graphs/traversal_algo.h>
-
-#include <utils/parser.h>
-#include <utils/stopwatch.h>
-#include <utils/utils.h>
 
 #include "pr_common.h"
 
@@ -124,7 +121,7 @@ __global__ void PageRankInit__Multi__(TGraph graph,
     for (index_t edge = begin_edge; edge < end_edge; ++edge) {
       index_t dest = graph.edge_dest(edge);
       if (atomicAdd(residual.get_item_ptr(dest), update) == 0) {
-        if (!graph.owns(dest)) //
+        if (!graph.owns(dest))  //
         {
           remote_work_target.append_work(dest);
         }
@@ -133,9 +130,10 @@ __global__ void PageRankInit__Multi__(TGraph graph,
   }
 }
 
-__device__ double atomicExchD(double *address, double val) {
-  unsigned long long int* address_as_ull = (unsigned long long int*)address;
-  unsigned long long res = atomicExch(address_as_ull, __double_as_longlong(val));
+__device__ double atomicExchD(double* address, double val) {
+  unsigned long long int* address_as_ull = (unsigned long long int*) address;
+  unsigned long long res =
+      atomicExch(address_as_ull, __double_as_longlong(val));
   return __longlong_as_double(res);
 }
 
@@ -152,7 +150,7 @@ __global__ void PageRankKernel__Single__NestedParallelism__(
   uint32_t work_size = work_source.get_size();
   uint32_t work_size_rup =
       round_up(work_size, blockDim.x) *
-      blockDim.x; // we want all threads in active blocks to enter the loop
+      blockDim.x;  // we want all threads in active blocks to enter the loop
 
   for (uint32_t i = 0 + tid; i < work_size_rup; i += nthreads) {
     groute::dev::np_local<rank_t> np_local = {0, 0, 0.0};
@@ -167,7 +165,7 @@ __global__ void PageRankKernel__Single__NestedParallelism__(
         np_local.start = graph.begin_edge(node);
         np_local.size = graph.end_edge(node) - np_local.start;
 
-        if (np_local.size > 0) // Just in case
+        if (np_local.size > 0)  // Just in case
         {
           rank_t update = res * ALPHA / np_local.size;
           np_local.meta_data = update;
@@ -190,10 +188,11 @@ __global__ void PageRankKernel__Single__NestedParallelism__(
 template <typename TGraph, template <typename> class RankDatum,
           template <typename> class ResidualDatum, typename WorkSource,
           template <typename> class TWorklist>
-__global__ void
-PageRankKernel__Single__(TGraph graph, RankDatum<rank_t> current_ranks,
-                         ResidualDatum<rank_t> residual, WorkSource work_source,
-                         TWorklist<index_t> output_worklist) {
+__global__ void PageRankKernel__Single__(TGraph graph,
+                                         RankDatum<rank_t> current_ranks,
+                                         ResidualDatum<rank_t> residual,
+                                         WorkSource work_source,
+                                         TWorklist<index_t> output_worklist) {
   unsigned tid = TID_1D;
   unsigned nthreads = TOTAL_THREADS_1D;
 
@@ -204,7 +203,7 @@ PageRankKernel__Single__(TGraph graph, RankDatum<rank_t> current_ranks,
 
     rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
     if (res == 0)
-      continue; // might happen if work_source has duplicates
+      continue;  // might happen if work_source has duplicates
 
     current_ranks[node] += res;
 
@@ -239,7 +238,7 @@ __global__ void PageRankKernel__Multi__NestedParallelism__(
   uint32_t work_size = work_source.get_size();
   uint32_t work_size_rup =
       round_up(work_size, blockDim.x) *
-      blockDim.x; // we want all threads in active blocks to enter the loop
+      blockDim.x;  // we want all threads in active blocks to enter the loop
 
   for (uint32_t i = 0 + tid; i < work_size_rup; i += nthreads) {
     groute::dev::np_local<rank_t> np_local = {0, 0, 0.0};
@@ -254,7 +253,7 @@ __global__ void PageRankKernel__Multi__NestedParallelism__(
         np_local.start = graph.begin_edge(node);
         np_local.size = graph.end_edge(node) - np_local.start;
 
-        if (np_local.size > 0) // Just in case
+        if (np_local.size > 0)  // Just in case
         {
           rank_t update = res * ALPHA / np_local.size;
           np_local.meta_data = update;
@@ -275,7 +274,7 @@ __global__ void PageRankKernel__Multi__NestedParallelism__(
           }
 
           else {
-            if (prev == 0) // no EPSILON check for remote nodes
+            if (prev == 0)  // no EPSILON check for remote nodes
             {
               remote_work_target.append_work(dest);
             }
@@ -287,11 +286,10 @@ __global__ void PageRankKernel__Multi__NestedParallelism__(
 template <typename TGraph, template <typename> class RankDatum,
           template <typename> class ResidualDatum, typename WorkSource,
           template <typename> class TWorklist, typename WorkTarget>
-__global__ void
-PageRankKernel__Multi__(TGraph graph, RankDatum<rank_t> current_ranks,
-                        ResidualDatum<rank_t> residual, WorkSource work_source,
-                        TWorklist<index_t> local_output_worklist,
-                        WorkTarget remote_work_target) {
+__global__ void PageRankKernel__Multi__(
+    TGraph graph, RankDatum<rank_t> current_ranks,
+    ResidualDatum<rank_t> residual, WorkSource work_source,
+    TWorklist<index_t> local_output_worklist, WorkTarget remote_work_target) {
   unsigned tid = TID_1D;
   unsigned nthreads = TOTAL_THREADS_1D;
 
@@ -302,7 +300,7 @@ PageRankKernel__Multi__(TGraph graph, RankDatum<rank_t> current_ranks,
 
     rank_t res = atomicExchD(residual.get_item_ptr(node), 0);
     if (res == 0)
-      continue; // might happen if work_source has duplicates
+      continue;  // might happen if work_source has duplicates
 
     current_ranks[node] += res;
 
@@ -325,7 +323,7 @@ PageRankKernel__Multi__(TGraph graph, RankDatum<rank_t> current_ranks,
       }
 
       else {
-        if (prev == 0) // no EPSILON check for remote nodes
+        if (prev == 0)  // no EPSILON check for remote nodes
         {
           remote_work_target.append_work(dest);
         }
@@ -335,20 +333,20 @@ PageRankKernel__Multi__(TGraph graph, RankDatum<rank_t> current_ranks,
 }
 
 struct SplitOps {
-private:
+ private:
   groute::graphs::dev::CSRGraphSeg m_graph_seg;
   groute::graphs::dev::GraphDatum<rank_t> m_residual;
 
-public:
+ public:
   template <typename... UnusedData>
-  SplitOps(const groute::graphs::dev::CSRGraphSeg &graph_seg,
-           const groute::graphs::dev::GraphDatum<rank_t> &residual,
-           const groute::graphs::dev::GraphDatumSeg<rank_t> &current_ranks,
-           UnusedData &...data)
+  SplitOps(const groute::graphs::dev::CSRGraphSeg& graph_seg,
+           const groute::graphs::dev::GraphDatum<rank_t>& residual,
+           const groute::graphs::dev::GraphDatumSeg<rank_t>& current_ranks,
+           UnusedData&... data)
       : m_graph_seg(graph_seg), m_residual(residual) {}
 
-  __device__ __forceinline__ groute::SplitFlags
-  on_receive(const remote_work_t &work) {
+  __device__ __forceinline__ groute::SplitFlags on_receive(
+      const remote_work_t& work) {
     if (m_graph_seg.owns(work.node)) {
       rank_t prev = atomicAdd(m_residual.get_item_ptr(work.node), work.rank);
       return (prev + work.rank > EPSILON && prev < EPSILON) ? groute::SF_Take
@@ -366,25 +364,24 @@ public:
     return RankData(work, atomicExchD(m_residual.get_item_ptr(work), 0));
   }
 
-  __device__ __forceinline__ local_work_t unpack(const remote_work_t &work) {
+  __device__ __forceinline__ local_work_t unpack(const remote_work_t& work) {
     return work.node;
   }
-
 };
 
-__global__ void
-PageRankPackKernel(groute::graphs::dev::GraphDatum<rank_t> residual,
-                   groute::graphs::dev::GraphDatum<index_t> halos_datum,
-                   groute::graphs::dev::GraphDatum<mark_t> halos_marks,
-                   groute::dev::CircularWorklist<RankData> remote_worklist) {
+__global__ void PageRankPackKernel(
+    groute::graphs::dev::GraphDatum<rank_t> residual,
+    groute::graphs::dev::GraphDatum<index_t> halos_datum,
+    groute::graphs::dev::GraphDatum<mark_t> halos_marks,
+    groute::dev::CircularWorklist<RankData> remote_worklist) {
   int tid = TID_1D;
   unsigned nthreads = TOTAL_THREADS_1D;
 
   for (uint32_t i = 0 + tid; i < halos_datum.size; i += nthreads) {
-    index_t halo_node = halos_datum[i]; // promised to be unique
+    index_t halo_node = halos_datum[i];  // promised to be unique
     if (halos_marks[halo_node] == 1) {
-      remote_worklist.append_warp(
-          RankData(halo_node, atomicExchD(residual.get_item_ptr(halo_node), 0)));
+      remote_worklist.append_warp(RankData(
+          halo_node, atomicExchD(residual.get_item_ptr(halo_node), 0)));
       halos_marks[halo_node] = 0;
     }
   }
@@ -400,18 +397,18 @@ struct Problem {
   ResidualDatum<rank_t> m_residual;
   RankDatum<rank_t> m_current_ranks;
 
-  Problem(const TGraph &graph, const ResidualDatum<rank_t> &residual,
-          const RankDatum<rank_t> &current_ranks)
+  Problem(const TGraph& graph, const ResidualDatum<rank_t>& residual,
+          const RankDatum<rank_t>& current_ranks)
       : m_graph(graph), m_residual(residual), m_current_ranks(current_ranks) {}
 
   // Initial init. Called before a global CPU+GPU barrier
-  void Init(groute::Stream &stream) const {
+  void Init(groute::Stream& stream) const {
     GROUTE_CUDA_CHECK(cudaMemsetAsync(m_residual.data_ptr, 0,
                                       m_residual.size * sizeof(rank_t),
                                       stream.cuda_stream));
   }
 
-  void Init__Single__(groute::Stream &stream) const {
+  void Init__Single__(groute::Stream& stream) const {
     dim3 grid_dims, block_dims;
     KernelSizing(grid_dims, block_dims, m_graph.owned_nnodes());
 
@@ -420,8 +417,8 @@ struct Problem {
         m_graph, m_current_ranks, m_residual);
   }
 
-  void Init__Multi__(groute::Worklist<index_t> &output_worklist,
-                     groute::Stream &stream) const {
+  void Init__Multi__(groute::Worklist<index_t>& output_worklist,
+                     groute::Stream& stream) const {
     dim3 grid_dims, block_dims;
     KernelSizing(grid_dims, block_dims, m_graph.owned_nnodes());
 
@@ -432,9 +429,9 @@ struct Problem {
   }
 
   template <typename WorkSource, template <typename> class TWorklist>
-  void Relax__Single__(const WorkSource &work_source,
-                       TWorklist<index_t> &output_worklist,
-                       groute::Stream &stream) const {
+  void Relax__Single__(const WorkSource& work_source,
+                       TWorklist<index_t>& output_worklist,
+                       groute::Stream& stream) const {
     dim3 grid_dims, block_dims;
     KernelSizing(grid_dims, block_dims, work_source.get_size());
 
@@ -455,9 +452,9 @@ struct Problem {
   }
 
   template <typename WorkSource, template <typename> class TWorklist>
-  void Relax__Multi__(const WorkSource &work_source,
-                      TWorklist<index_t> &output_worklist,
-                      groute::Stream &stream) const {
+  void Relax__Multi__(const WorkSource& work_source,
+                      TWorklist<index_t>& output_worklist,
+                      groute::Stream& stream) const {
     dim3 grid_dims, block_dims;
     KernelSizing(grid_dims, block_dims, work_source.get_size());
 
@@ -483,38 +480,39 @@ struct Problem {
 template <typename TGraph, template <typename> class ResidualDatum,
           template <typename> class RankDatum>
 class Solver {
-public:
+ public:
   typedef Problem<TGraph, ResidualDatum, RankDatum> ProblemType;
 
-private:
-  ProblemType &m_problem;
+ private:
+  ProblemType& m_problem;
 
-public:
-  Solver(groute::Context &context, ProblemType &problem) : m_problem(problem) {}
+ public:
+  Solver(groute::Context& context, ProblemType& problem) : m_problem(problem) {}
 
-  void Solve(groute::Context &context, groute::device_t dev,
-             groute::MultiChannelDistributedWorklist<local_work_t, remote_work_t>
-                 &distributed_worklist,
-             groute::IMultiChannelDistributedWorklistPeer<local_work_t, remote_work_t>
-                 *worklist_peer,
-             groute::Stream &stream) {
-    auto &input_worklist = worklist_peer->GetLocalInputWorklist();
-    auto &temp_worklist =
-        worklist_peer->GetTempWorklist(); // local output worklist
+  void Solve(
+      groute::Context& context, groute::device_t dev,
+      groute::MultiChannelDistributedWorklist<local_work_t, remote_work_t>&
+          distributed_worklist,
+      groute::IMultiChannelDistributedWorklistPeer<local_work_t, remote_work_t>*
+          worklist_peer,
+      groute::Stream& stream) {
+    auto& input_worklist = worklist_peer->GetLocalInputWorklist();
+    auto& temp_worklist =
+        worklist_peer->GetTempWorklist();  // local output worklist
 
     m_problem.Init__Multi__(temp_worklist, stream);
 
     auto seg1 = temp_worklist.ToSeg(stream);
 
     // report work
-    distributed_worklist.ReportWork((int)seg1.GetSegmentSize(),
-                                    (int)m_problem.m_graph.owned_nnodes(), "PR",
-                                    dev);
+    distributed_worklist.ReportWork((int) seg1.GetSegmentSize(),
+                                    (int) m_problem.m_graph.owned_nnodes(),
+                                    "PR", dev);
 
-    worklist_peer->PerformSplitSend(seg1, stream); // call split-send
+    worklist_peer->PerformSplitSend(seg1, stream);  // call split-send
 
     temp_worklist.ResetAsync(
-        stream.cuda_stream); // reset the temp output worklist
+        stream.cuda_stream);  // reset the temp output worklist
 
     // First relax is a special case, starts from all owned nodes
     m_problem.Relax__Multi__(groute::dev::WorkSourceRange<index_t>(
@@ -525,9 +523,9 @@ public:
     auto seg2 = temp_worklist.ToSeg(stream);
 
     // report work
-    distributed_worklist.ReportWork((int)seg2.GetSegmentSize(), 0, "PR", dev);
+    distributed_worklist.ReportWork((int) seg2.GetSegmentSize(), 0, "PR", dev);
 
-    worklist_peer->PerformSplitSend(seg2, stream); // call split-send
+    worklist_peer->PerformSplitSend(seg2, stream);  // call split-send
 
     int iteration = 0;
     int async_iteration_factor = 3;
@@ -535,10 +533,10 @@ public:
     // we must allow more iterations
     int max_iterations = FLAGS_max_pr_iterations * async_iteration_factor;
 
-    while (distributed_worklist
-               .HasWork() /*&& distributed_worklist.HasActivePeers()*/) {
+    while (distributed_worklist.HasWork() &&
+           distributed_worklist.HasActivePeers()) {
       temp_worklist.ResetAsync(
-          stream.cuda_stream); // reset the temp output worklist
+          stream.cuda_stream);  // reset the temp output worklist
 
       auto input_segs = worklist_peer->GetLocalWork(stream);
       size_t new_work = 0, performed_work = 0;
@@ -558,24 +556,24 @@ public:
                                      stream.cuda_stream);
         performed_work += input_seg.GetSegmentSize();
       }
-
       auto output_seg = temp_worklist.ToSeg(stream);
-      new_work = output_seg.GetSegmentSize(); // add the new work
+      new_work = output_seg.GetSegmentSize();  // add the new work
 
       // report work
-      distributed_worklist.ReportWork((int)new_work, (int)performed_work, "PR",
-                                      dev);
+      distributed_worklist.ReportWork((int) new_work, (int) performed_work,
+                                      "PR", dev);
 
-      worklist_peer->PerformSplitSend(output_seg, stream); // call split-send
+      worklist_peer->PerformSplitSend(output_seg, stream);  // call split-send
 
       if (iteration++ == max_iterations) {
-        // distributed_worklist.ReportPeerTermination();
-        // terminated = true;
-        //
-        // printf("Device %d is terminating after %d iterations (max: %d *
-        // %d)\n\n", dev, iteration-1, FLAGS_max_pr_iterations,
-        // async_iteration_factor); continue; // Go on until all devices report
-        // termination, and router shutsdown
+        distributed_worklist.ReportPeerTermination();
+
+        printf(
+            "Device %d is terminating after %d iterations (max: %d * %d)\n\n",
+            dev, iteration - 1, FLAGS_max_pr_iterations,
+            async_iteration_factor);
+        continue;  // Go on until all devices report termination, and router
+                   // shutsdown
       }
     }
 
@@ -587,44 +585,48 @@ public:
 };
 
 struct Algo {
-  static const char *NameLower() { return "pr"; }
-  static const char *Name() { return "PR"; }
+  static const char* NameLower() { return "pr"; }
+  static const char* Name() { return "PR"; }
 
-  static void Init(groute::graphs::traversal::Context<pr::Algo> &context,
-                   groute::graphs::multi::CSRGraphAllocator &graph_manager,
-                   std::vector<std::shared_ptr<groute::router::IRouter<remote_work_t>>> &worklist_router,
-                   groute::IDistributedWorklist& distributed_worklist) {
+  static void Init(
+      groute::graphs::traversal::Context<pr::Algo>& context,
+      groute::graphs::multi::CSRGraphAllocator& graph_manager,
+      std::vector<std::shared_ptr<groute::router::IRouter<remote_work_t>>>&
+          worklist_router,
+      groute::IDistributedWorklist& distributed_worklist) {
     distributed_worklist.ReportWork(
-        context.host_graph.nnodes); // PR starts with all nodes
+        context.host_graph.nnodes);  // PR starts with all nodes
   }
 
   template <typename TGraphAllocator, template <typename> class ResidualDatum,
             template <typename> class RankDatum, typename... UnusedData>
-  static std::vector<rank_t>
-  Gather(TGraphAllocator &graph_allocator, ResidualDatum<rank_t> &residual,
-         RankDatum<rank_t> &current_ranks, UnusedData &...data) {
+  static std::vector<rank_t> Gather(TGraphAllocator& graph_allocator,
+                                    ResidualDatum<rank_t>& residual,
+                                    RankDatum<rank_t>& current_ranks,
+                                    UnusedData&... data) {
     graph_allocator.GatherDatum(current_ranks);
     return current_ranks.GetHostData();
   }
 
   template <template <typename> class ResidualDatum,
             template <typename> class RankDatum, typename... UnusedData>
-  static std::vector<rank_t>
-  Host(groute::graphs::host::CSRGraph &graph, ResidualDatum<rank_t> &residual,
-       RankDatum<rank_t> &current_ranks, UnusedData &...data) {
+  static std::vector<rank_t> Host(groute::graphs::host::CSRGraph& graph,
+                                  ResidualDatum<rank_t>& residual,
+                                  RankDatum<rank_t>& current_ranks,
+                                  UnusedData&... data) {
     return PageRankHost(graph);
   }
 
-  static int Output(const char *file, const std::vector<rank_t> &ranks) {
+  static int Output(const char* file, const std::vector<rank_t>& ranks) {
     return PageRankOutput(file, ranks);
   }
 
-  static int CheckErrors(std::vector<rank_t> &ranks,
-                         std::vector<rank_t> &regression) {
+  static int CheckErrors(std::vector<rank_t>& ranks,
+                         std::vector<rank_t>& regression) {
     return PageRankCheckErrors(ranks, regression);
   }
 };
-} // namespace pr
+}  // namespace pr
 
 bool TestPageRankAsyncMulti(int ngpus) {
   typedef groute::graphs::multi::CSRGraphAllocator GraphAllocator;
@@ -661,7 +663,7 @@ bool TestPageRankSingle() {
   dev_graph_allocator.AllocateDatumObjects(residual, current_ranks);
 
   context.SyncDevice(
-      0); // graph allocations are on default streams, must sync device
+      0);  // graph allocations are on default streams, must sync device
 
   pr::Problem<groute::graphs::dev::CSRGraph, groute::graphs::dev::GraphDatum,
               groute::graphs::dev::GraphDatum>
@@ -682,7 +684,7 @@ bool TestPageRankSingle() {
 
   Stopwatch sw(true);
 
-  groute::Worklist<index_t> *in_wl = &wl1, *out_wl = &wl2;
+  groute::Worklist<index_t>*in_wl = &wl1, *out_wl = &wl2;
 
   solver.Init__Single__(stream);
 
@@ -715,8 +717,9 @@ bool TestPageRankSingle() {
   sw.stop();
 
   if (FLAGS_repetitions > 1)
-    printf("\nWarning: ignoring repetitions flag, running just one repetition "
-           "(not implemented)\n");
+    printf(
+        "\nWarning: ignoring repetitions flag, running just one repetition "
+        "(not implemented)\n");
 
   printf("\n%s: %f ms. <filter>\n\n", pr::Algo::Name(),
          sw.ms() / FLAGS_repetitions);

@@ -115,6 +115,8 @@ struct IPipelinedReceiver {
   /// @brief Sync on all current memory operations in the pipeline
   virtual void Sync() const = 0;
 
+  virtual bool IsReady() = 0;
+
   /// @brief Receive a segment of data from peers
   virtual std::shared_future<PendingSegment<T>> Receive() = 0;
 
@@ -209,6 +211,18 @@ class PipelinedReceiver : public IPipelinedReceiver<T> {
     auto pseg = m_promised_segments.front();
     m_promised_segments.pop_front();
     return pseg;
+  }
+
+  bool IsReady() override {
+    if (m_promised_segments.empty()) {
+      if (!m_receiver->Active()) {
+        return true;
+      }
+      throw std::exception();  // m_promised_segments is empty (usage: Start ->
+      // Receive -> Release)
+    }
+
+    return groute::is_ready(m_promised_segments.front());
   }
 
   std::vector<router::PendingSegment<T>> ReceiveBatch(size_t limit) override {

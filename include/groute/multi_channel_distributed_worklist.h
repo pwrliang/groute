@@ -500,6 +500,8 @@ class MultiChannelDistributedWorklistPeer
         auto& worklist = (*worklists)[channel];
         for (auto& seg : worklist->ToSegs(stream)) {
           collected_segs[channel].push_back(seg);
+          m_size_send[channel] += seg.GetSegmentSize();
+          m_seg_count[channel]++;
         }
       }
       sw.stop();
@@ -521,13 +523,13 @@ class MultiChannelDistributedWorklistPeer
         //        ss << "Ring: " << p_send.channel << " Len: " << p_send.len <<
         //        " ";
       }
+      stream.Sync();
       sw1.stop();
       m_time_send += sw1.ms();
       ss << std::endl;
       if (m_dev == 0 && !send_ops.empty()) {
         //        std::cout << ss.str();
       }
-      stream.Sync();
     }
   }
 

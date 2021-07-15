@@ -264,14 +264,15 @@ class Context {
 
     m_memcpy_invokers.at(lane_identifier)->InvokeCopyAsync(copy);
 
-//    auto key = std::make_pair(src_dev_id, dst_dev_id);
+    auto key = std::make_pair(src_dev_id, dst_dev_id);
 
-//    std::lock_guard<std::mutex> lock(m_mutex);
+//    if (count > 1024 * 1024) {
+//      std::lock_guard<std::mutex> lock(m_mutex);
 //
-//    m_copy_size[key].size += count;
-//    m_copy_size[key].count++;
-//    m_memcpy_info.push_back(count);
-
+//      m_copy_size[key].size += count;
+//      m_copy_size[key].count++;
+//      m_memcpy_info.push_back(count);
+//    }
     return copy;
   }
 

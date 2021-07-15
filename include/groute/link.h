@@ -97,6 +97,10 @@ class Link : public router::IPipelinedReceiver<T>, public router::ISender<T> {
     return GetReceiver()->Receive();
   }
 
+  std::vector<router::PendingSegment<T>> ReceiveBatch(size_t limit) {
+    return GetReceiver()->ReceiveBatch(limit);
+  }
+
   void ReleaseBuffer(const Segment<T>& segment,
                      const Event& ready_event) override {
     GetReceiver()->ReleaseBuffer(segment, ready_event);

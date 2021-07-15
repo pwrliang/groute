@@ -118,6 +118,8 @@ struct IPipelinedReceiver {
   /// @brief Receive a segment of data from peers
   virtual std::shared_future<PendingSegment<T>> Receive() = 0;
 
+  virtual std::vector<router::PendingSegment<T>> ReceiveBatch(size_t limit) = 0;
+
   /// @brief Release the segment buffer for reuse
   virtual void ReleaseBuffer(const Segment<T>& segment,
                              const Event& ready_event) = 0;
@@ -209,6 +211,41 @@ class PipelinedReceiver : public IPipelinedReceiver<T> {
     return pseg;
   }
 
+  std::vector<router::PendingSegment<T>> ReceiveBatch(size_t limit) override {
+    std::vector<router::PendingSegment<T>> pending_segs;
+
+    if (m_promised_segments.empty()) {
+      if (!m_receiver->Active()) {
+        pending_segs.push_back(PendingSegment<T>());
+        return pending_segs;
+      }
+      // m_promised_segments is empty (usage: Start -> Receive -> Release)
+      throw std::exception();
+    }
+
+    size_t curr_size = m_promised_segments.size();
+
+    typename std::deque<std::shared_future<PendingSegment<T>>>::iterator it =
+        m_promised_segments.begin();
+
+    for (int i = 0; i < curr_size && pending_segs.size() < limit; i++) {
+      auto& ft = *it;
+      if (groute::is_ready(ft)) {
+        pending_segs.push_back(ft.get());
+        it = m_promised_segments.erase(it);
+      } else {
+        it++;
+      }
+    }
+
+    if (pending_segs.empty()) {
+      auto pseg = m_promised_segments.front();
+      m_promised_segments.pop_front();
+      pending_segs.push_back(pseg.get());
+    }
+    return pending_segs;
+  }
+
   // return pending segment to m_promised_segments
   void ReleaseBuffer(const Segment<T>& segment,
                      const Event& ready_event) override {
@@ -218,6 +255,7 @@ class PipelinedReceiver : public IPipelinedReceiver<T> {
         m_dev_buffers.end())
       throw std::exception();  // unrecognized buffer
 #endif
+    // put back and re-issue a receive op
     m_promised_segments.push_back(
         m_receiver->Receive(Buffer<T>(buffer, m_chunk_size), ready_event));
   }

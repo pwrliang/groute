@@ -110,6 +110,8 @@ DEFINE_bool(gen_weights, false, "Generate edge weights if missing in graph input
 DEFINE_int32(gen_weight_range, 100, "The range to generate edge weights from (coordinate this parameter with nf-delta if running sssp-nf)");
 
 DEFINE_int32(nrings, 1, "number of rings");
+DEFINE_int32(recv_limit, 1, "Batch size for receiving");
+
 
 #ifdef HAVE_METIS
 DEFINE_bool(pn, true, "Partition the input graph using METIS (requires a symmetric graph)");

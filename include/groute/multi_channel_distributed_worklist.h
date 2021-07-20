@@ -282,9 +282,8 @@ class MultiChannelDistributedWorklistPeer
     counter.ResetAsync(stream.cuda_stream);
 
     dim3 block_dims(DBS, 1, 1);
-    dim3 grid_dims(std::min(768, (int) round_up(received_work.GetSegmentSize(),
-                                                block_dims.x)),
-                   1, 1);
+    dim3 grid_dims(round_up(received_work.GetSegmentSize(), block_dims.x), 1,
+                   1);
 
     MultiSplitReceiveKernel<TLocal, TRemote, SplitOps>
         <<<grid_dims, block_dims, 0, stream.cuda_stream>>>(
@@ -591,7 +590,8 @@ class MultiChannelDistributedWorklistPeer
 
   void SignalRemoteWork(const Event& ev) override {
     ev.Wait(m_send_stream.cuda_stream);
-    auto current = m_send_remote_output_worklists[m_channel]->GetBounds(m_send_stream);
+    auto current =
+        m_send_remote_output_worklists[m_channel]->GetBounds(m_send_stream);
     auto exclude = current.Exclude(m_send_bounds[m_channel]);
     m_send_bounds[m_channel] = current;
 

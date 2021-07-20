@@ -331,9 +331,6 @@ class MultiChannelDistributedWorklistPeer
     CircularWorklist<TRemote>& pass_wl =
         *(m_pass_remote_output_worklists[channel]);
     auto bounds = pass_wl.GetBounds(stream);
-
-    size_t recv_size = 0;
-
     while (true) {
       auto& link_in = m_links_in[channel];
       auto seg = link_in.Receive().get();
@@ -342,12 +339,8 @@ class MultiChannelDistributedWorklistPeer
         break;
       }
 
-      recv_size += seg.GetSegmentSize();
-      if (recv_size > std::numeric_limits<uint32_t>::max()) {
-        std::cout << "Overflow" << std::endl;
-      }
-
       size_t pop_count = 0;
+
       // pop sent segment as much as possible
       while (!issued_send_ops.empty() &&
              groute::is_ready(issued_send_ops.front().future)) {
@@ -372,7 +365,6 @@ class MultiChannelDistributedWorklistPeer
         pop_count += pop.size;
         issued_send_ops.pop_front();
       }
-
       pass_wl.PopItemsAsync(pop_count, stream.cuda_stream);
 
       seg.Wait(stream.cuda_stream);
@@ -397,7 +389,7 @@ class MultiChannelDistributedWorklistPeer
 
       // Now, forward work with sender and push Pop objects
       for (auto seg_to_send : pass_wl.GetSegs(exclude)) {
-        auto sent_ev = m_links_out[channel].Send(seg_to_send, Event());
+        auto sent_ev = m_links_out[channel].Send(seg_to_send, split_ev);
 
         issued_send_ops.push_back(Pop(sent_ev, seg_to_send.GetSegmentSize()));
       }

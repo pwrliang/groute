@@ -699,6 +699,8 @@ class CircularWorklist {
   int m_instance_id;
   mutable uint32_t m_max_usage;
 
+  std::string m_name;
+
  public:
   CircularWorklist(uint32_t capacity = 0)
       : m_data(nullptr),
@@ -715,7 +717,7 @@ class CircularWorklist {
     Alloc();
   }
 
-  CircularWorklist(T* mem_buffer, uint32_t mem_size)
+  CircularWorklist(T* mem_buffer, uint32_t mem_size, std::string name = "")
       : m_data(mem_buffer),
         m_mem_owner(false),
         m_start(nullptr),
@@ -726,7 +728,8 @@ class CircularWorklist {
         m_host_alloc_end(nullptr),
         m_capacity(mem_size),
         m_instance_id(0),
-        m_max_usage(0) {
+        m_max_usage(0),
+        m_name(std::move(name)) {
     Alloc();
   }
 
@@ -791,8 +794,8 @@ class CircularWorklist {
     GROUTE_CUDA_CHECK(cudaFreeHost(m_host_alloc_end));
   }
 
-  void GetBounds(uint32_t& start, uint32_t& end, uint32_t& size,
-                 const Stream& stream) const {
+  void GetActualBounds(uint32_t& start, uint32_t& end,
+                       const Stream& stream) const {
     GROUTE_CUDA_CHECK(cudaMemcpyAsync(m_host_start, m_start, sizeof(uint32_t),
                                       cudaMemcpyDeviceToHost,
                                       stream.cuda_stream));
@@ -808,13 +811,21 @@ class CircularWorklist {
     assert(end - start < m_capacity);
 
     if (end - start >= m_capacity) {
+      int dev;
+      GROUTE_CUDA_CHECK(cudaGetDevice(&dev));
       printf(
           "\n\nCritical Warning: circular worklist has overflowed, please "
-          "allocate more memory (instance id: %d, start: %d, end: %d, "
+          "allocate more memory (dev = %d, name = %s, instance id: %d, start: "
+          "%d, end: %d, "
           "capacity: %d), exiting \n\n",
-          m_instance_id, start, end, m_capacity);
+          dev, m_name.c_str(), m_instance_id, start, end, m_capacity);
       exit(1);
     }
+  }
+
+  void GetBounds(uint32_t& start, uint32_t& end, uint32_t& size,
+                 const Stream& stream) const {
+    GetActualBounds(start, end, stream);
 
     m_max_usage = max(m_max_usage, end - start);
 
@@ -852,6 +863,62 @@ class CircularWorklist {
   DeviceObjectType DeviceObject() const {
     return dev::CircularWorklist<T>(m_data, m_start, m_end, m_alloc_end,
                                     m_capacity);
+  }
+
+  //
+  // Helper class for queue bounds
+  //
+  struct Bounds {
+    uint32_t start, end;
+
+    Bounds(uint32_t start, uint32_t end) : start(start), end(end) {}
+    Bounds() : start(0), end(0) {}
+
+    int GetCount() const {
+      return end - start;
+    }  // Works also if numbers over/under flow
+    Bounds Exclude(Bounds other) const { return Bounds(other.end, end); }
+  };
+
+  Bounds GetBounds(const Stream& stream) {
+    Bounds bounds;
+    GetActualBounds(bounds.start, bounds.end, stream);
+    return bounds;
+  }
+
+  uint32_t GetSpace(Bounds bounds) const {
+    return m_capacity - bounds.GetCount();
+  }
+
+  uint32_t GetSpace(const Stream& stream) {
+    auto bounds = GetBounds(stream);
+    if (bounds.GetCount() < 0) {
+      PrintOffsetsDebug(stream);
+    }
+    return GetSpace(bounds);
+  }
+
+  std::vector<Segment<T>> GetSegs(Bounds bounds) {
+    uint32_t start = bounds.start, end = bounds.end, size = bounds.GetCount();
+
+    start = start % m_capacity;
+    end = end % m_capacity;
+
+    std::vector<Segment<T>> segs;
+
+    if (end > start)  // normal case
+    {
+      segs.push_back(Segment<T>(m_data + start, size));
+    } else if (start > end) {
+      segs.push_back(Segment<T>(m_data + start, size - end));
+      if (end > 0) {
+        segs.push_back(Segment<T>(m_data, end));
+      }
+    }
+
+    // else empty
+
+    return segs;
   }
 
   void ResetAsync(cudaStream_t stream) const {

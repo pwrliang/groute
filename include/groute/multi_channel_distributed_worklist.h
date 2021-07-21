@@ -310,106 +310,65 @@ class MultiChannelDistributedWorklistPeer
     int source = 0;
     Stopwatch sw, sw1;
 
-    while (true) {
-      /*
-       * 1. A worklist from SendSplit
-       * 2. multiple worklists from ReceiveSplit
-       */
+    auto forward_works =
+        [this,
+         &stream](std::vector<std::vector<Segment<TRemote>>>& grouped_segs) {
+          bool ready = false;
 
-      auto forward_works = [this, &stream]() {
-        bool ready = true;
+          for (int channel = 0; channel < m_router_count; channel++) {
+            if (!m_pass_remote_work_events[channel]->empty()) {
+              ready = true;
+              // Block
+              m_pass_remote_work_events[channel]->pop().Wait(
+                  stream.cuda_stream);
+              auto& worklist = m_pass_worklists[channel];
 
-        for (int channel = 0; channel < m_router_count; channel++) {
-          ready &= !m_pass_remote_work_events[channel]->empty();
-        }
-
-        if (!ready) {
-          return false;
-        }
-        std::vector<std::vector<Segment<TRemote>>> grouped_segs(m_router_count);
-
-        for (int channel = 0; channel < m_router_count; channel++) {
-          m_pass_remote_work_events[channel]->pop().Wait(stream.cuda_stream);
-          auto& worklist = m_pass_worklists[channel];
-
-          for (auto seg : worklist->ToSegs(stream)) {
-            // Split seg into equal chunks, then number it.
-            grouped_segs[channel].push_back(seg);
+              for (auto seg : worklist->ToSegs(stream)) {
+                // Split seg into equal chunks, then number it.
+                grouped_segs[channel].push_back(seg);
+              }
+            }
           }
-        }
 
-        std::vector<PendingSend> send_ops;
-        // Emitting segs at the same time
-        for (int channel = 0; channel < m_router_count; channel++) {
-          for (auto& seg : grouped_segs[channel]) {
-            auto fut = m_links_out[channel].Send(seg, Event());
-            send_ops.template emplace_back(channel, fut, seg.GetSegmentSize());
-          }
-        }
+          return ready;
+        };
 
-        std::vector<size_t> aggregated_size(m_router_count, 0);
-
-        for (auto& send_op : send_ops) {
-          aggregated_size[send_op.channel] += send_op.len;
-          send_op.fut.get().Wait(stream.cuda_stream);
-        }
-
-        for (int channel = 0; channel < m_router_count; channel++) {
-          m_pass_worklists[channel]->PopItemsAsync(aggregated_size[channel],
-                                                   stream.cuda_stream);
-        }
-        return true;
-      };
-
-      auto send_works = [this, &stream]() {
-        if (m_send_remote_work) {
-          m_send_remote_work = false;
-          m_send_remote_work_event.Wait(stream.cuda_stream);
-
+    auto send_works =
+        [this,
+         &stream](std::vector<std::vector<Segment<TRemote>>>& grouped_segs) {
           std::vector<Segment<TRemote>> segs;
 
           for (auto seg : m_send_worklist.ToSegs(stream)) {
-            auto avg_seg_len =
-                (seg.GetSegmentSize() + m_router_count - 1) / m_router_count;
-            auto split_segs = seg.Split(avg_seg_len);
+            if (!seg.Empty()) {
+              auto avg_seg_len =
+                  (seg.GetSegmentSize() + m_router_count - 1) / m_router_count;
+              auto split_segs = seg.Split(avg_seg_len);
 
-            segs.insert(segs.begin(), split_segs.begin(), split_segs.end());
+              segs.insert(segs.begin(), split_segs.begin(), split_segs.end());
+            }
           }
 
           size_t avg_seg_count =
               (segs.size() + m_router_count - 1) / m_router_count;
-          std::vector<PendingSend> send_ops;
 
           for (int channel = 0; channel < m_router_count; channel++) {
             size_t begin = std::min(channel * avg_seg_count, segs.size());
             size_t end = std::min((channel + 1) * avg_seg_count, segs.size());
 
             for (size_t i = begin; i < end; i++) {
-              auto& seg = segs[i];
-              auto fut = m_links_out[channel].Send(seg, Event());
-
-              send_ops.template emplace_back(channel, fut,
-                                             seg.GetSegmentSize());
+              grouped_segs[channel].push_back(segs[begin]);
             }
           }
+          return !grouped_segs.empty();
+        };
 
-          size_t aggregated_size = 0;
-
-          for (auto& send_op : send_ops) {
-            aggregated_size += send_op.len;
-            send_op.fut.get().Wait(stream.cuda_stream);
-          }
-          m_send_worklist.PopItemsAsync(aggregated_size, stream.cuda_stream);
-          return true;
-        }
-        return false;
-      };
+    while (true) {
+      std::vector<std::vector<Segment<TRemote>>> grouped_segs(m_router_count);
+      bool send_compute = false;
 
       {
         std::unique_lock<std::mutex> guard(m_send_mutex);
 
-        // This loop just find out a matched work_ev which comes from
-        // upstream, and a corresponding worklist
         while (true) {
           if (m_exit) {
             break;
@@ -417,12 +376,20 @@ class MultiChannelDistributedWorklistPeer
           // we alternate source for giving each worklist a fair chance
           // This procedure will be triggered by ReceiveLoop
           if (source == 0) {
-            if (!send_works()) {
-              forward_works();
+            if (send_works(grouped_segs)) {
+              send_compute = true;
+              break;
+            }
+            if (forward_works(grouped_segs)) {
+              break;
             }
           } else {
-            if (!forward_works()) {
-              send_works();
+            if (forward_works(grouped_segs)) {
+              break;
+            }
+            if (send_works(grouped_segs)) {
+              send_compute = true;
+              break;
             }
           }
           // Notified by SignalRemoteWork or ReceiveLoop
@@ -435,6 +402,39 @@ class MultiChannelDistributedWorklistPeer
 
       source = 1 - source;
 
+      std::vector<PendingSend> send_ops;
+
+      for (int channel = 0; channel < m_router_count; channel++) {
+        for (auto seg : grouped_segs[channel]) {
+          auto fut = m_links_out[channel].Send(seg, Event());
+
+          send_ops.template emplace_back(channel, fut, seg.GetSegmentSize());
+        }
+      }
+
+      if (send_compute) {
+        size_t aggregated_size = 0;
+
+        for (auto& send_op : send_ops) {
+          aggregated_size += send_op.len;
+          send_op.fut.get().Wait(stream.cuda_stream);
+        }
+        m_send_worklist.PopItemsAsync(aggregated_size, stream.cuda_stream);
+      } else {
+        std::vector<size_t> aggregated_size(m_router_count, 0);
+
+        for (auto& send_op : send_ops) {
+          aggregated_size[send_op.channel] += send_op.len;
+          send_op.fut.get().Wait(stream.cuda_stream);
+        }
+
+        for (int channel = 0; channel < m_router_count; channel++) {
+          m_pass_worklists[channel]->PopItemsAsync(aggregated_size[channel],
+                                                   stream.cuda_stream);
+        }
+      }
+
+      stream.Sync();
       m_send_times++;
     }
   }

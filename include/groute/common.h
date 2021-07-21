@@ -69,6 +69,8 @@ inline std::vector<int> range(int count, int from = 0) {
 
 namespace groute {
 
+struct EmptyType {};
+
 /**
  * @brief Device related metadata
  */
@@ -157,28 +159,25 @@ class Segment {
 
  public:
   Segment(T* segment_ptr, size_t total_size, size_t segment_size,
-          size_t segment_offset, int metadata = -1)
+          size_t segment_offset)
       : m_segment_ptr(segment_ptr),
         m_total_size(total_size),
         m_segment_size(segment_size),
-        m_segment_offset(segment_offset),
-        metadata(metadata) {}
+        m_segment_offset(segment_offset) {}
 
-  Segment(T* segment_ptr, size_t total_size, int metadata = -1)
+  Segment(T* segment_ptr, size_t total_size)
       : m_segment_ptr(segment_ptr),
         m_total_size(total_size),
         m_segment_size(total_size),
-        m_segment_offset(0),
-        metadata(metadata) {}
+        m_segment_offset(0) {}
 
   Segment()
       : m_segment_ptr(nullptr),
         m_total_size(0),
         m_segment_size(0),
-        m_segment_offset(0),
-        metadata(-1) {}
+        m_segment_offset(0) {}
 
-  int metadata;  // a metadata field for user customization
+  void* metadata;  // a metadata field for user customization
 
   /// @brief is the segment empty
   bool Empty() const { return m_segment_size == 0; }
@@ -208,8 +207,7 @@ class Segment {
       throw std::exception();  // out of segment range
 #endif
     return Segment<T>(m_segment_ptr + relative_offset, m_total_size,
-                      sub_segment_size, m_segment_offset + relative_offset,
-                      metadata);
+                      sub_segment_size, m_segment_offset + relative_offset);
   }
 
   Segment<T> GetFirstSubSegment(size_t max_subseg_size) const {

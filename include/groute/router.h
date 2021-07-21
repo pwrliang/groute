@@ -231,8 +231,7 @@ struct IPolicy {
   virtual ~IPolicy() = default;
 
   virtual RoutingTable GetRoutingTable() = 0;  // TODO: we can avoid this
-  virtual Route GetRoute(device_t src_dev, int message_metadata) = 0;
-  virtual int GetRouteNum() const = 0;
+  virtual Route GetRoute(device_t src_dev, void *message_metadata) = 0;
 };
 
 struct IRouterBase  // an untyped base interface for the Router

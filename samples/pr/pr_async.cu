@@ -533,8 +533,8 @@ class Solver {
     // we must allow more iterations
     int max_iterations = FLAGS_max_pr_iterations * async_iteration_factor;
 
-    while (distributed_worklist.HasWork() &&
-           distributed_worklist.HasActivePeers()) {
+    while (distributed_worklist.HasWork() //&& distributed_worklist.HasActivePeers()
+           ) {
       temp_worklist.ResetAsync(
           stream.cuda_stream);  // reset the temp output worklist
 
@@ -565,7 +565,7 @@ class Solver {
 
       worklist_peer->PerformSplitSend(output_seg, stream);  // call split-send
 
-      if (iteration++ == max_iterations) {
+      if (iteration++ == max_iterations && false) {
         distributed_worklist.ReportPeerTermination();
 
         printf(

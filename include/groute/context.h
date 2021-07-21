@@ -78,6 +78,7 @@ class Context {
 
   std::map<std::pair<int, int>, CopyStatistics> m_copy_size;
   std::vector<size_t> m_memcpy_info;
+  std::atomic<size_t> m_memcpy_size{};
 
  public:
   void RequireMemcpyLane(int src_dev, int dst_dev) {
@@ -232,6 +233,9 @@ class Context {
     std::cout << "Total memcpy: " << m_memcpy_info.size() << " times, "
               << total_size / 1024.0 / 1024 / 1024 << " GB" << std::endl;
     */
+    std::cout << "Memcpy copy size: "
+              << (double) m_memcpy_size / 1024 / 1024 / 1024 << " GB"
+              << std::endl;
   }
 
   std::shared_ptr<groute::MemcpyWork> QueueMemcpyWork(
@@ -264,15 +268,17 @@ class Context {
 
     m_memcpy_invokers.at(lane_identifier)->InvokeCopyAsync(copy);
 
-    auto key = std::make_pair(src_dev_id, dst_dev_id);
+    m_memcpy_size += count;
 
-//    if (count > 1024 * 1024) {
-//      std::lock_guard<std::mutex> lock(m_mutex);
-//
-//      m_copy_size[key].size += count;
-//      m_copy_size[key].count++;
-//      m_memcpy_info.push_back(count);
-//    }
+    //    auto key = std::make_pair(src_dev_id, dst_dev_id);
+
+    //    if (count > 1024 * 1024) {
+    //      std::lock_guard<std::mutex> lock(m_mutex);
+    //
+    //      m_copy_size[key].size += count;
+    //      m_copy_size[key].count++;
+    //      m_memcpy_info.push_back(count);
+    //    }
     return copy;
   }
 

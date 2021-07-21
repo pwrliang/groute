@@ -272,7 +272,7 @@ struct __MultiRunner__ {
       for (auto& seq : seqs) {
         worklist_routers.push_back(
             std::make_shared<groute::router::Router<TRemote>>(
-                context, groute::router::SimplePolicy::CreateRingPolicy(seq)));
+                context, groute::router::Policy::CreateRingPolicy(seq)));
       }
     } else {
       worklist_routers.push_back(

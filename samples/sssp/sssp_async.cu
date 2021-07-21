@@ -26,24 +26,21 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+#include <gflags/gflags.h>
+#include <groute/cta_work.h>
+#include <groute/distributed_worklist.h>
+#include <groute/event_pool.h>
+#include <groute/graphs/csr_graph.h>
+#include <groute/graphs/traversal_algo.h>
+#include <utils/parser.h>
+#include <utils/stopwatch.h>
+#include <utils/utils.h>
+
 #include <algorithm>
 #include <memory>
 #include <random>
 #include <thread>
 #include <vector>
-
-#include <gflags/gflags.h>
-
-#include <groute/cta_work.h>
-#include <groute/distributed_worklist.h>
-#include <groute/event_pool.h>
-
-#include <groute/graphs/csr_graph.h>
-#include <groute/graphs/traversal_algo.h>
-
-#include <utils/parser.h>
-#include <utils/stopwatch.h>
-#include <utils/utils.h>
 
 #include "sssp_common.h"
 
@@ -78,53 +75,52 @@ typedef index_t local_work_t;
 typedef DistanceData remote_work_t;
 
 struct WorkTargetRemoteWorklist {
-private:
+ private:
   groute::dev::CircularWorklist<remote_work_t> m_worklist;
 
-public:
-  WorkTargetRemoteWorklist(groute::CircularWorklist<remote_work_t> &worklist)
+ public:
+  WorkTargetRemoteWorklist(groute::CircularWorklist<remote_work_t>& worklist)
       : m_worklist(worklist.DeviceObject()) {}
 
-  __device__ __forceinline__ void append_work(const remote_work_t &work) {
+  __device__ __forceinline__ void append_work(const remote_work_t& work) {
     m_worklist.append_warp(work);
   }
 };
 
 struct WorkTargetDummy {
-
-public:
+ public:
   WorkTargetDummy() {}
 
-  __device__ __forceinline__ void append_work(const remote_work_t &work) {}
+  __device__ __forceinline__ void append_work(const remote_work_t& work) {}
 };
 
 struct WorkTargetRemoteMark {
-private:
+ private:
   groute::graphs::dev::GraphDatum<mark_t> m_remote_marks;
   groute::dev::Counter m_remote_counter;
 
-public:
+ public:
   WorkTargetRemoteMark(groute::graphs::dev::GraphDatum<mark_t> remote_marks,
-                       groute::Counter &remote_counter)
+                       groute::Counter& remote_counter)
       : m_remote_marks(remote_marks),
         m_remote_counter(remote_counter.DeviceObject()) {}
 
-  __device__ __forceinline__ void append_work(const remote_work_t &work) {
+  __device__ __forceinline__ void append_work(const remote_work_t& work) {
     if (m_remote_marks[work.node] == 0) {
-      m_remote_marks[work.node] = 1; // mark
+      m_remote_marks[work.node] = 1;  // mark
       m_remote_counter.add_one_warp();
     }
   }
 };
 
-__global__ void SSSPInit(distance_t *distances, int nnodes) {
+__global__ void SSSPInit(distance_t* distances, int nnodes) {
   int tid = GTID;
   if (tid < nnodes) {
     distances[tid] = INF;
   }
 }
 
-__global__ void SSSPInit(distance_t *distances, int nnodes, index_t source) {
+__global__ void SSSPInit(distance_t* distances, int nnodes, index_t source) {
   int tid = GTID;
   if (tid < nnodes) {
     distances[tid] = tid == source ? 0 : INF;
@@ -144,7 +140,7 @@ __global__ void SSSPKernel__NestedParallelism__(TGraph graph,
   uint32_t work_size = work_source.get_size();
   uint32_t work_size_rup =
       round_up(work_size, blockDim.x) *
-      blockDim.x; // we want all threads in active blocks to enter the loop
+      blockDim.x;  // we want all threads in active blocks to enter the loop
 
   for (uint32_t i = 0 + tid; i < work_size_rup; i += nthreads) {
     groute::dev::np_local<distance_t> np_local = {0, 0, 0};
@@ -157,8 +153,8 @@ __global__ void SSSPKernel__NestedParallelism__(TGraph graph,
     }
 
     groute::dev::CTAWorkScheduler<distance_t>::template schedule(
-        np_local, [&graph, &edge_weights, &node_distances,
-                   &work_target](index_t edge, distance_t distance) {
+        np_local, [&graph, &edge_weights, &node_distances, &work_target](
+                      index_t edge, distance_t distance) {
           index_t dest = graph.edge_dest(edge);
           distance_t weight = edge_weights.get_item(edge);
 
@@ -212,7 +208,7 @@ __global__ void SSSPKernel__NF__NestedParallelism__(
   uint32_t work_size = work_source.get_size();
   uint32_t work_size_rup =
       round_up(work_size, blockDim.x) *
-      blockDim.x; // we want all threads in active blocks to enter the loop
+      blockDim.x;  // we want all threads in active blocks to enter the loop
 
   for (uint32_t i = 0 + tid; i < work_size_rup; i += nthreads) {
     groute::dev::np_local<distance_t> np_local = {0, 0, 0};
@@ -342,26 +338,26 @@ __global__ void SSSPNearFarSplit__NF__(
 }
 
 struct SplitOps {
-private:
+ private:
   groute::graphs::dev::CSRGraphSeg m_graph_seg;
   groute::graphs::dev::GraphDatum<distance_t> m_distances_datum;
 
-public:
+ public:
   template <typename... UnusedData>
-  SplitOps(const groute::graphs::dev::CSRGraphSeg &graph_seg,
-           const groute::graphs::dev::GraphDatumSeg<distance_t> &weights_datum,
-           const groute::graphs::dev::GraphDatum<distance_t> &distances_datum,
-           UnusedData &...data)
+  SplitOps(const groute::graphs::dev::CSRGraphSeg& graph_seg,
+           const groute::graphs::dev::GraphDatumSeg<distance_t>& weights_datum,
+           const groute::graphs::dev::GraphDatum<distance_t>& distances_datum,
+           UnusedData&... data)
       : m_graph_seg(graph_seg), m_distances_datum(distances_datum) {}
 
-  __device__ __forceinline__ groute::SplitFlags
-  on_receive(const remote_work_t &work) {
+  __device__ __forceinline__ groute::SplitFlags on_receive(
+      const remote_work_t& work) {
     if (m_graph_seg.owns(work.node)) {
       return (work.distance <
               atomicMin(m_distances_datum.get_item_ptr(work.node),
                         work.distance))
                  ? groute::SF_Take
-                 : groute::SF_None; // filter
+                 : groute::SF_None;  // filter
     }
 
     return groute::SF_Pass;
@@ -375,7 +371,7 @@ public:
     return DistanceData(work, m_distances_datum.get_item(work));
   }
 
-  __device__ __forceinline__ local_work_t unpack(const remote_work_t &work) {
+  __device__ __forceinline__ local_work_t unpack(const remote_work_t& work) {
     return work.node;
   }
 };
@@ -387,13 +383,14 @@ struct Problem {
   TWeightDatum<distance_t> m_weights_datum;
   TDistanceDatum<distance_t> m_distances_datum;
 
-public:
-  Problem(const TGraph &graph, const TWeightDatum<distance_t> &weights_datum,
-          const TDistanceDatum<distance_t> &distances_datum)
-      : m_graph(graph), m_weights_datum(weights_datum),
+ public:
+  Problem(const TGraph& graph, const TWeightDatum<distance_t>& weights_datum,
+          const TDistanceDatum<distance_t>& distances_datum)
+      : m_graph(graph),
+        m_weights_datum(weights_datum),
         m_distances_datum(distances_datum) {}
 
-  void Init(groute::Stream &stream) const {
+  void Init(groute::Stream& stream) const {
     dim3 grid_dims, block_dims;
     KernelSizing(grid_dims, block_dims, m_distances_datum.size);
 
@@ -403,7 +400,7 @@ public:
         m_distances_datum.data_ptr, m_distances_datum.size);
   }
 
-  void Init(groute::Worklist<index_t> &in_wl, groute::Stream &stream) const {
+  void Init(groute::Worklist<index_t>& in_wl, groute::Stream& stream) const {
     index_t source_node = min(max(0, FLAGS_source_node), m_graph.nnodes - 1);
 
     dim3 grid_dims, block_dims;
@@ -415,12 +412,12 @@ public:
         m_distances_datum.data_ptr, m_distances_datum.size, source_node);
 
     in_wl.AppendItemAsync(stream.cuda_stream,
-                          source_node); // add the first item to the worklist
+                          source_node);  // add the first item to the worklist
   }
 
   template <typename TWorklist, bool WarpAppend = true>
-  void Relax(const groute::Segment<index_t> &work, TWorklist &output_worklist,
-             groute::Stream &stream) const {
+  void Relax(const groute::Segment<index_t>& work, TWorklist& output_worklist,
+             groute::Stream& stream) const {
     if (work.Empty())
       return;
 
@@ -448,11 +445,11 @@ public:
 
   template <template <typename> class LocalWorklist,
             template <typename> class RemoteWorklist>
-  void Relax__NF__(const groute::Segment<index_t> &work, int delta,
-                   LocalWorklist<index_t> &near_worklist,
-                   LocalWorklist<index_t> &far_worklist,
-                   RemoteWorklist<DistanceData> &remote_worklist,
-                   groute::Stream &stream) const {
+  void Relax__NF__(const groute::Segment<index_t>& work, int delta,
+                   LocalWorklist<index_t>& near_worklist,
+                   LocalWorklist<index_t>& far_worklist,
+                   RemoteWorklist<DistanceData>& remote_worklist,
+                   groute::Stream& stream) const {
     if (work.Empty())
       return;
 
@@ -480,10 +477,10 @@ public:
     }
   }
 
-  void RelaxSingle__NF__(const groute::Segment<index_t> &work, int delta,
-                         groute::Worklist<index_t> &near_worklist,
-                         groute::Worklist<index_t> &far_worklist,
-                         groute::Stream &stream) const {
+  void RelaxSingle__NF__(const groute::Segment<index_t>& work, int delta,
+                         groute::Worklist<index_t>& near_worklist,
+                         groute::Worklist<index_t>& far_worklist,
+                         groute::Stream& stream) const {
     if (work.Empty())
       return;
 
@@ -511,11 +508,10 @@ public:
     }
   }
 
-  uint32_t
-  SplitRemoteInput__NF__(const std::vector<groute::Segment<index_t>> &work_segs,
-                         int delta, groute::Worklist<index_t> &near_worklist,
-                         groute::Worklist<index_t> &far_worklist,
-                         groute::Stream &stream) const {
+  uint32_t SplitRemoteInput__NF__(
+      const std::vector<groute::Segment<index_t>>& work_segs, int delta,
+      groute::Worklist<index_t>& near_worklist,
+      groute::Worklist<index_t>& far_worklist, groute::Stream& stream) const {
     uint32_t work_size = 0;
     dim3 grid_dims, block_dims;
 
@@ -537,15 +533,17 @@ public:
       KernelSizing(grid_dims, block_dims, work_size);
       SSSPNearFarSplit__NF__<<<grid_dims, block_dims, 0, stream.cuda_stream>>>(
           delta,
-          groute::dev::WorkSourceTwoArrays<index_t>( // using a two seg template
+          groute::dev::WorkSourceTwoArrays<index_t>(  // using a two seg
+                                                      // template
               work_segs[0].GetSegmentPtr(), work_segs[0].GetSegmentSize(),
               work_segs[1].GetSegmentPtr(), work_segs[1].GetSegmentSize()),
           m_distances_datum, near_worklist.DeviceObject(),
           far_worklist.DeviceObject());
       break;
     default:
-      printf("\n\nWarning: work_segs has more then two segments, something is "
-             "wrong\n\n");
+      printf(
+          "\n\nWarning: work_segs has more then two segments, something is "
+          "wrong\n\n");
       assert(false);
     }
 
@@ -553,14 +551,15 @@ public:
   }
 };
 
-template <typename Algo, typename Problem> class SSSPSolver__NF__ {
-  Problem &m_problem;
+template <typename Algo, typename Problem>
+class SSSPSolver__NF__ {
+  Problem& m_problem;
   std::unique_ptr<groute::Worklist<local_work_t>> m_worklist1;
   std::unique_ptr<groute::Worklist<local_work_t>> m_worklist2;
 
-public:
-  SSSPSolver__NF__(groute::graphs::traversal::Context<Algo> &context,
-                   Problem &problem)
+ public:
+  SSSPSolver__NF__(groute::graphs::traversal::Context<Algo>& context,
+                   Problem& problem)
       : m_problem(problem) {
     size_t max_work_size =
         (context.host_graph.nedges / context.ngpus) * FLAGS_wl_alloc_factor;
@@ -573,35 +572,38 @@ public:
         groute::make_unique<groute::Worklist<local_work_t>>(max_work_size);
   }
 
-  void Solve(groute::graphs::traversal::Context<Algo> &context,
-             groute::device_t dev,
-             groute::DistributedWorklist<local_work_t, remote_work_t>
-                 &distributed_worklist,
-             groute::IDistributedWorklistPeer<local_work_t, remote_work_t>
-                 *worklist_peer,
-             groute::Stream &stream) {
+  void Solve(
+      groute::graphs::traversal::Context<Algo>& context, groute::device_t dev,
+      groute::MultiChannelDistributedWorklist<local_work_t, remote_work_t>&
+          distributed_worklist,
+      groute::IMultiChannelDistributedWorklistPeer<local_work_t, remote_work_t>*
+          worklist_peer,
+      groute::Stream& stream) {
     m_worklist1->ResetAsync(stream.cuda_stream);
     m_worklist2->ResetAsync(stream.cuda_stream);
 
     int current_delta = FLAGS_nf_delta;
 
-    auto &remote_input_worklist = worklist_peer->GetLocalInputWorklist();
-    auto &remote_output_worklist = worklist_peer->GetRemoteOutputWorklist();
+    auto& remote_input_worklist = worklist_peer->GetLocalInputWorklist();
 
-    groute::Worklist<local_work_t> *input_worklist =
-        &worklist_peer->GetTempWorklist(); // near output worklist
-    groute::Worklist<local_work_t> *near_worklist =
-        m_worklist1.get(); // near output worklist
-    groute::Worklist<local_work_t> *far_worklist =
-        m_worklist2.get(); // far output worklist
+    groute::Worklist<local_work_t>* input_worklist =
+        &worklist_peer->GetTempWorklist();  // near output worklist
+    groute::Worklist<local_work_t>* near_worklist =
+        m_worklist1.get();  // near output worklist
+    groute::Worklist<local_work_t>* far_worklist =
+        m_worklist2.get();  // far output worklist
 
     groute::Segment<index_t> input_seg;
+    int channel = 0;
 
     while (distributed_worklist.HasWork()) {
       int overall_far_work = 0;
 
       while (true) {
         size_t new_work = 0, performed_work = 0;
+        auto& remote_output_worklist = worklist_peer->GetRemoteOutputWorklist(channel);
+
+        channel = (channel + 1) % worklist_peer->GetChannelCount();
 
         m_problem.Relax__NF__(input_seg, current_delta, *near_worklist,
                               *far_worklist, remote_output_worklist, stream);
@@ -611,7 +613,7 @@ public:
         // Merge remote work into the local near-far worklists
         auto remote_input_segs =
             input_seg.Empty()
-                ? worklist_peer->GetLocalWork(stream) // blocking call
+                ? worklist_peer->GetLocalWork(stream)  // blocking call
                 : remote_input_worklist.ToSegs(stream);
 
         int remote_input_work = m_problem.SplitRemoteInput__NF__(
@@ -629,10 +631,10 @@ public:
         new_work += current_near_work;
         new_work += (current_far_work - overall_far_work);
         new_work += remote_output_worklist.GetAllocCountAndSync(
-            stream); // get the work pushed and sync alloc-end
+            stream);  // get the work pushed and sync alloc-end
 
         worklist_peer->SignalRemoteWork(
-            context.RecordEvent(dev, stream.cuda_stream)); // signal
+            context.RecordEvent(dev, stream.cuda_stream));  // signal
 
         // Report overall work
         distributed_worklist.ReportWork(new_work, performed_work, Algo::Name(),
@@ -644,7 +646,7 @@ public:
                                              current_near_work);
 
         if (input_seg.Empty())
-          break; // break to the far worklist
+          break;  // break to the far worklist
         std::swap(near_worklist, input_worklist);
       }
 
@@ -658,14 +660,14 @@ public:
 };
 
 struct Algo {
-  static const char *NameLower() { return FLAGS_nf ? "sssp-nf" : "sssp"; }
-  static const char *Name() { return FLAGS_nf ? "SSSP-nf" : "SSSP"; }
+  static const char* NameLower() { return FLAGS_nf ? "sssp-nf" : "sssp"; }
+  static const char* Name() { return FLAGS_nf ? "SSSP-nf" : "SSSP"; }
 
-  static void Init(groute::graphs::traversal::Context<sssp::Algo> &context,
-                   groute::graphs::multi::CSRGraphAllocator &graph_manager,
-                   groute::router::Router<remote_work_t> &worklist_router,
-                   groute::DistributedWorklist<local_work_t, remote_work_t>
-                       &distributed_worklist) {
+  static void Init(groute::graphs::traversal::Context<sssp::Algo>& context,
+                   groute::graphs::multi::CSRGraphAllocator& graph_manager,
+                   std::vector<std::shared_ptr<groute::router::IRouter<remote_work_t>>>&
+                   worklist_router,
+                   groute::IDistributedWorklist& distributed_worklist) {
     index_t source_node =
         min(max(0, FLAGS_source_node), context.host_graph.nnodes - 1);
 
@@ -680,8 +682,8 @@ struct Algo {
     std::vector<remote_work_t> initial_work;
     initial_work.push_back(remote_work_t(source_node, 0));
 
-    groute::router::ISender<remote_work_t> *work_sender =
-        worklist_router.GetSender(groute::Device::Host);
+    groute::router::ISender<remote_work_t>* work_sender =
+        worklist_router[0]->GetSender(groute::Device::Host, 0, 0 );
     work_sender->Send(groute::Segment<remote_work_t>(&initial_work[0], 1),
                       groute::Event());
     work_sender->Shutdown();
@@ -689,35 +691,34 @@ struct Algo {
 
   template <typename TGraphAllocator, template <typename> class TWeightDatum,
             template <typename> class TDistanceDatum, typename... UnusedData>
-  static std::vector<distance_t>
-  Gather(TGraphAllocator &graph_allocator,
-         TWeightDatum<distance_t> &weights_datum,
-         TDistanceDatum<distance_t> &distances_datum, UnusedData &...data) {
+  static std::vector<distance_t> Gather(
+      TGraphAllocator& graph_allocator, TWeightDatum<distance_t>& weights_datum,
+      TDistanceDatum<distance_t>& distances_datum, UnusedData&... data) {
     graph_allocator.GatherDatum(distances_datum);
     return distances_datum.GetHostData();
   }
 
   template <template <typename> class TWeightDatum,
             template <typename> class TDistanceDatum, typename... UnusedData>
-  static std::vector<distance_t>
-  Host(groute::graphs::host::CSRGraph &graph,
-       TWeightDatum<distance_t> &weights_datum,
-       TDistanceDatum<distance_t> &distances_datum, UnusedData &...data) {
+  static std::vector<distance_t> Host(
+      groute::graphs::host::CSRGraph& graph,
+      TWeightDatum<distance_t>& weights_datum,
+      TDistanceDatum<distance_t>& distances_datum, UnusedData&... data) {
     return SSSPHostNaive(graph, weights_datum.GetHostDataPtr(),
                          min(max(0, FLAGS_source_node), graph.nnodes - 1));
   }
 
-  static int Output(const char *file,
-                    const std::vector<distance_t> &distances) {
+  static int Output(const char* file,
+                    const std::vector<distance_t>& distances) {
     return SSSPOutput(file, distances);
   }
 
-  static int CheckErrors(const std::vector<distance_t> &distances,
-                         const std::vector<distance_t> &regression) {
+  static int CheckErrors(const std::vector<distance_t>& distances,
+                         const std::vector<distance_t>& regression) {
     return SSSPCheckErrors(distances, regression);
   }
 };
-} // namespace sssp
+}  // namespace sssp
 
 bool TestSSSPAsyncMulti__NF__(int ngpus) {
   typedef sssp::Problem<groute::graphs::dev::CSRGraphSeg,
@@ -727,7 +728,7 @@ bool TestSSSPAsyncMulti__NF__(int ngpus) {
 
   groute::graphs::traversal::__MultiRunner__<
       sssp::Algo, Problem,
-      sssp::SSSPSolver__NF__<sssp::Algo, Problem>, // The NF solver
+      sssp::SSSPSolver__NF__<sssp::Algo, Problem>,  // The NF solver
       sssp::SplitOps, sssp::local_work_t, sssp::remote_work_t,
       groute::graphs::multi::EdgeInputDatum<distance_t>,
       groute::graphs::multi::NodeOutputGlobalDatum<distance_t>>
@@ -779,7 +780,7 @@ bool TestSSSPSingle__NF__() {
   dev_graph_allocator.AllocateDatumObjects(edge_weights, node_distances);
 
   context.SyncDevice(
-      0); // graph allocations are on default streams, must sync device
+      0);  // graph allocations are on default streams, must sync device
 
   Problem problem(dev_graph_allocator.DeviceObject(),
                   edge_weights.DeviceObject(), node_distances.DeviceObject());
@@ -802,8 +803,8 @@ bool TestSSSPSingle__NF__() {
   IntervalRangeMarker algo_rng(context.host_graph.nedges,
                                "SSSP-nf start (hardwired single GPU)");
 
-  groute::Worklist<index_t> *input_worklist = &wl1, *near_worklist = &wl2,
-                            *far_worklist = &wl3;
+  groute::Worklist<index_t>*input_worklist = &wl1, *near_worklist = &wl2,
+  *far_worklist = &wl3;
 
   problem.Init(*input_worklist, stream);
 
@@ -833,8 +834,9 @@ bool TestSSSPSingle__NF__() {
   sw.stop();
 
   if (FLAGS_repetitions > 1)
-    printf("\nWarning: ignoring repetitions flag, running just one repetition "
-           "(not implemented)\n");
+    printf(
+        "\nWarning: ignoring repetitions flag, running just one repetition "
+        "(not implemented)\n");
 
   printf("\n%s: %f ms. <filter>\n\n", sssp::Algo::Name(),
          sw.ms() / FLAGS_repetitions);

@@ -37,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "gflags/gflags.h"
@@ -51,32 +52,26 @@ namespace router {
  */
 class Policy : public IPolicy {
  private:
-  std::vector<RoutingTable> m_tables;
+  RoutingTable m_table;
   RouteStrategy m_strategy;
 
  public:
-  Policy(const RoutingTable& topology, RouteStrategy strategy = Availability)
-      : m_tables{topology}, m_strategy(strategy) {}
-
-  Policy(std::vector<RoutingTable> tables,
-         RouteStrategy strategy = Availability)
-      : m_tables(std::move(tables)), m_strategy(strategy) {}
+  Policy(RoutingTable topology, RouteStrategy strategy = Availability)
+      : m_table{std::move(topology)}, m_strategy(strategy) {}
 
   RoutingTable GetRoutingTable() override {
     RoutingTable full_table;
 
-    for (auto& table : m_tables) {
-      for (auto& e : table) {
-        auto src = e.first;
-        auto& dsts = e.second;
+    for (auto& e : m_table) {
+      auto src = e.first;
+      auto& dsts = e.second;
 
-        for (auto dst : dsts) {
-          auto& merged_dsts = full_table[src];
+      for (auto dst : dsts) {
+        auto& merged_dsts = full_table[src];
 
-          if (std::find(merged_dsts.begin(), merged_dsts.end(), dst) ==
-              merged_dsts.end()) {
-            merged_dsts.push_back(dst);
-          }
+        if (std::find(merged_dsts.begin(), merged_dsts.end(), dst) ==
+            merged_dsts.end()) {
+          merged_dsts.push_back(dst);
         }
       }
     }
@@ -84,22 +79,11 @@ class Policy : public IPolicy {
     return full_table;
   }
 
-  Route GetRoute(device_t src_dev, int message_metadata) override {
-    RoutingTable topology;
-    if (m_tables.size() == 1 || message_metadata == -1) {
-      topology = m_tables[0];
-    } else {
-      topology = m_tables[message_metadata];
-    }
+  Route GetRoute(device_t src_dev, void* message_metadata) override {
+    assert(m_table.find(src_dev) != m_table.end());
 
-    //    std::cout << "ring id: " << message_metadata << std::endl;
-
-    assert(topology.find(src_dev) != topology.end());
-
-    return Route(topology.at(src_dev), m_strategy);
+    return Route(m_table.at(src_dev), m_strategy);
   }
-
-  int GetRouteNum() const override { return m_tables.size(); }
 
   static std::shared_ptr<IPolicy> CreateBroadcastPolicy(
       device_t src_dev, const std::vector<device_t>& dst_devs) {
@@ -210,65 +194,6 @@ class Policy : public IPolicy {
 
     return std::make_shared<Policy>(topology, Availability);
   }
-
-  static std::shared_ptr<IPolicy> CreateMultiRingsPolicy(int ndevs) {
-    assert(ndevs > 0);
-
-    if (ndevs != 8) {
-      return CreateRingPolicy(ndevs);
-    }
-    std::vector<std::vector<int>> seqs{{0, 3, 2, 1, 7, 4, 5, 6},
-                                       {0, 6, 5, 4, 7, 1, 2, 3},
-                                       {0, 2, 4, 6, 7, 5, 3, 1},
-                                       {0, 1, 3, 5, 7, 6, 4, 2}};
-
-    if (FLAGS_nrings > seqs.size()) {
-      std::cerr << "Too many rings" << std::endl;
-      std::exit(1);
-    }
-    seqs.resize(FLAGS_nrings);
-
-    std::cout << "seqs " << seqs.size() << std::endl;
-
-    std::vector<RoutingTable> tables;
-
-    for (auto& seq : seqs) {
-      RoutingTable topology;
-
-      for (int i = 0; i < seq.size(); i++) {
-        topology[seq[i]] = {seq[(i + 1) % seq.size()]};
-      }
-
-      // Instead of pushing to GPU 0, we push tasks to the first available
-      // device, this is beneficial for the case where the first device is
-      // already utilized with a prior task.
-      topology[Device::Host] = range(ndevs);  // for initial work from host
-      tables.push_back(topology);
-    }
-
-    return std::make_shared<Policy>(tables, Availability);
-  }
-};
-
-class SimplePolicy : public IPolicy {
- private:
-  RoutingTable m_table;
-  RouteStrategy m_strategy;
-
- public:
-  SimplePolicy(const RoutingTable& topology,
-               RouteStrategy strategy = Availability)
-      : m_table{topology}, m_strategy(strategy) {}
-
-  RoutingTable GetRoutingTable() override { return m_table; }
-
-  Route GetRoute(device_t src_dev, int message_metadata) override {
-    assert(m_table.find(src_dev) != m_table.end());
-
-    return Route(m_table.at(src_dev), m_strategy);
-  }
-
-  int GetRouteNum() const override { return 1; }
 
   static std::shared_ptr<IPolicy> CreateRingPolicy(
       const std::vector<int>& dev_seq) {
